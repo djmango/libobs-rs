@@ -1,15 +1,20 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
-use std::{env, path::PathBuf, process};
+use std::{env, path::PathBuf};
+
+#[cfg(not(target_os = "macos"))]
+use std::process;
 
 use anyhow::Context;
 use async_stream::stream;
 use download::DownloadStatus;
 use extract::ExtractStatus;
 use futures_core::Stream;
-use futures_util::{StreamExt, pin_mut};
+use futures_util::{pin_mut, StreamExt};
 use lazy_static::lazy_static;
 use libobs::{LIBOBS_API_MAJOR_VER, LIBOBS_API_MINOR_VER, LIBOBS_API_PATCH_VER};
+
+#[cfg(not(target_os = "macos"))]
 use tokio::{fs::File, io::AsyncWriteExt, process::Command};
 
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -113,6 +118,7 @@ pub(crate) fn bootstrap(
         return Ok(None);
     }
 
+    #[allow(unused_variables)]
     let options = options.clone();
     Ok(Some(stream! {
         log::debug!("Downloading OBS from {}", repo);
@@ -195,6 +201,7 @@ pub(crate) fn bootstrap(
     }))
 }
 
+#[cfg(not(target_os = "macos"))]
 pub(crate) async fn spawn_updater(options: ObsBootstrapperOptions) -> anyhow::Result<()> {
     let pid = process::id();
     let args = env::args().collect::<Vec<_>>();

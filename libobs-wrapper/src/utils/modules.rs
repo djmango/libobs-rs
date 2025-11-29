@@ -27,7 +27,20 @@ impl Debug for ObsModules {
 }
 
 // List of all modules, this is for compatibility for obs versions below 32.0.0
-static SAFE_MODULES: &str = "decklink|image-source|linux-alsa|linux-capture|linux-pipewire|linux-pulseaudio|linux-v4l2|obs-ffmpeg|obs-filters|obs-nvenc|obs-outputs|obs-qsv11|obs-transitions|obs-vst|obs-websocket|obs-x264|rtmp-services|text-freetype2|vlc-video|decklink-captions|decklink-output-ui|obslua|obspython|frontend-tools";
+// Includes Linux, Windows, and macOS modules
+static SAFE_MODULES: &str = concat!(
+    // Cross-platform modules
+    "decklink|image-source|obs-ffmpeg|obs-filters|obs-outputs|obs-transitions|obs-vst|",
+    "obs-websocket|obs-x264|rtmp-services|text-freetype2|vlc-video|decklink-captions|",
+    "decklink-output-ui|obslua|obspython|frontend-tools|",
+    // Linux-specific modules
+    "linux-alsa|linux-capture|linux-pipewire|linux-pulseaudio|linux-v4l2|",
+    // Windows-specific modules
+    "obs-nvenc|obs-qsv11|",
+    // macOS-specific modules
+    "mac-videotoolbox|mac-capture|mac-avcapture|mac-avcapture-legacy|mac-syphon|",
+    "mac-virtualcam|coreaudio-encoder|aja"
+);
 
 impl ObsModules {
     pub fn add_paths(paths: &StartupPaths) -> Self {

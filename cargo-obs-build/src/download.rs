@@ -65,7 +65,6 @@ pub fn download_binaries(build_dir: &Path, info: &ReleaseInfo) -> anyhow::Result
         // Examples:
         // Windows: OBS-Studio-32.0.2-Windows-x64.zip
         // macOS: OBS-Studio-32.0.2-macOS-Intel.dmg or OBS-Studio-32.0.2-macOS-Apple.dmg
-        // Linux: OBS-Studio-32.0.2-Ubuntu-24.04-x86_64.deb
         name.contains("obs-studio")
             && (name.contains(platform_name) || (target_os == "windows" && name.contains("full")))
             && name.contains(file_extension)

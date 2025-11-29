@@ -1,3 +1,6 @@
+// This test is only implemented for Windows and Linux
+#![cfg(any(windows, target_os = "linux"))]
+
 use std::sync::{Arc, RwLock};
 
 #[cfg(target_os = "linux")]

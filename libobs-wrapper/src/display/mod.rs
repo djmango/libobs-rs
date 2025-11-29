@@ -128,6 +128,24 @@ impl ObsWindowHandle {
         windows::Win32::Foundation::HWND(self.window.0.hwnd)
     }
 
+    /// Creates a new ObsWindowHandle from a Cocoa NSView pointer.
+    ///
+    /// # Arguments
+    /// * `view` - A pointer to an NSView (or compatible view type)
+    ///
+    /// # Safety
+    /// The caller must ensure that the view pointer is valid and remains valid
+    /// for the lifetime of this handle.
+    #[cfg(target_os = "macos")]
+    pub fn new_from_cocoa(view: *mut c_void) -> Self {
+        Self {
+            window: Sendable(libobs::gs_window {
+                view: view as *mut _,
+            }),
+            is_wayland: false,
+        }
+    }
+
     #[cfg(target_os = "linux")]
     pub fn new_from_wayland(surface: *mut c_void) -> Self {
         Self {

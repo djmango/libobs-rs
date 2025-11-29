@@ -6,14 +6,11 @@ use libobs_wrapper::{
     utils::{AudioEncoderInfo, OutputInfo, StartupInfo},
 };
 
-#[cfg(target_os = "macos")]
-use libobs_wrapper::sources::ObsSourceBuilder;
-
-#[cfg(target_os = "macos")]
-use libobs_sources::macos::ScreenCaptureSourceBuilder;
+#[cfg(target_os = "windows")]
+use libobs_simple::sources::windows::MonitorCaptureSourceBuilder;
 
 #[cfg(target_os = "windows")]
-use libobs_sources::windows::MonitorCaptureSourceBuilder;
+use libobs_wrapper::sources::ObsSourceBuilder;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -36,22 +33,18 @@ async fn main() -> anyhow::Result<()> {
     println!("✓ Context initialized");
 
     // Step 3: Create scene and source (platform-specific)
+    #[allow(unused_mut)]
     let mut scene = context.scene("Recording Scene")?;
-    
+
     #[cfg(target_os = "macos")]
     {
-        use libobs_wrapper::sources::ObsSourceBuilder;
-        let _source = context
-            .source_builder::<ScreenCaptureSourceBuilder, _>("Screen Capture")?
-            .set_display(0)
-            .set_show_cursor(true)
-            .add_to_scene(&mut scene)?;
-        println!("✓ macOS screen capture ready");
+        // macOS screen capture sources are not yet implemented in libobs-simple
+        println!("Note: macOS screen capture sources are not yet implemented.");
+        println!("Recording will proceed without a capture source.");
     }
-    
+
     #[cfg(target_os = "windows")]
     {
-        use libobs_wrapper::sources::ObsSourceBuilder;
         let monitors = MonitorCaptureSourceBuilder::get_monitors()?;
         let _source = context
             .source_builder::<MonitorCaptureSourceBuilder, _>("Monitor Capture")?
@@ -59,18 +52,21 @@ async fn main() -> anyhow::Result<()> {
             .add_to_scene(&mut scene)?;
         println!("✓ Windows monitor capture ready");
     }
-    
+
     scene.set_to_channel(0)?;
 
     // Step 4: Setup output - MP4 with ffmpeg_muxer
     let mut output_settings = context.data()?;
-    
+
     #[cfg(target_os = "macos")]
     let desktop = std::env::var("HOME")? + "/Desktop/bootstrapper_recording.mp4";
-    
+
     #[cfg(target_os = "windows")]
     let desktop = std::env::var("USERPROFILE")? + "\\Desktop\\bootstrapper_recording.mp4";
-    
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let desktop = std::env::var("HOME")? + "/bootstrapper_recording.mp4";
+
     output_settings.set_string("path", desktop.as_str())?;
 
     let output_info = OutputInfo::new("ffmpeg_muxer", "output", Some(output_settings), None);
