@@ -20,6 +20,14 @@ The API is currently unstable and will definitely have breaking revisions in the
 
 ## Prerequisites
 
+### macOS Build Dependencies
+
+On macOS, you need to install `simde` (SIMD Everywhere) for building the bindings:
+
+```bash
+brew install simde
+```
+
 ### Option 1: Using libobs-bootstrapper (Recommended for macOS and distribution)
 
 > [!NOTE]

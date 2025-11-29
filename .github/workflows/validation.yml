@@ -79,6 +79,11 @@ jobs:
           # Install OBS Studio to /usr
           sudo cmake --install build_ubuntu
 
+      - name: Install macOS build dependencies
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install simde
+
       - name: Install cargo-obs-build from crates.io
         uses: baptiste0928/cargo-install@v3
         if: matrix.os != 'ubuntu-latest'
