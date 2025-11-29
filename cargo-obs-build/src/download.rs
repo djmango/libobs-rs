@@ -28,7 +28,13 @@ use crate::git::ReleaseInfo;
 
 const DEFAULT_REQ_TIMEOUT: u64 = 60 * 60;
 
-pub fn download_binaries(build_dir: &Path, info: &ReleaseInfo, strip_debug: bool) -> anyhow::Result<PathBuf> {
+/// Downloads OBS binaries and optionally debug symbols.
+/// Returns (main_binary_path, Option<debug_symbols_path>).
+pub fn download_binaries(
+    build_dir: &Path,
+    info: &ReleaseInfo,
+    strip_debug: bool,
+) -> anyhow::Result<(PathBuf, Option<PathBuf>)> {
     // Determine platform-specific search criteria based on TARGET platform
     // Priority: OBS_BUILD_TARGET > CARGO_CFG_TARGET_OS > host platform
     let target_os = std::env::var("OBS_BUILD_TARGET_OS")
@@ -64,35 +70,29 @@ pub fn download_binaries(build_dir: &Path, info: &ReleaseInfo, strip_debug: bool
         bail!("Linux OBS download not supported - install obs-studio manually");
     };
 
-    let to_download = &info.assets.iter().find(|e| {
+    // Find main binary - always exclude debug symbol archives
+    let to_download = info.assets.iter().find(|e| {
         let name = e["name"].as_str().unwrap_or("").to_lowercase();
 
         // Examples:
         // Windows: OBS-Studio-32.0.2-Windows-x64.zip
         // macOS: OBS-Studio-32.0.2-macOS-Intel.dmg or OBS-Studio-32.0.2-macOS-Apple.dmg
-        let matches_basic = name.contains("obs-studio")
+        name.contains("obs-studio")
             && (name.contains(platform_name) || (target_os == "windows" && name.contains("full")))
             && name.contains(file_extension)
-            && name.contains(arch_name);
-
-        // Exclude debug symbols if strip_debug is enabled
-        let exclude_debug = if strip_debug {
-            !name.contains("pdb") && !name.contains("dsym") && !name.contains("dbsym")
-        } else {
-            !name.contains("pdb") && !name.contains("dbsym") // Keep dsym when not stripping
-        };
-
-        matches_basic && exclude_debug
+            && name.contains(arch_name)
+            && !name.contains("pdb")
+            && !name.contains("dsym")
+            && !name.contains("dbsym")
     });
 
-    if to_download.is_none() {
-        bail!(
+    let to_download = to_download.ok_or_else(|| {
+        anyhow!(
             "No OBS Studio binaries found for platform: {}",
             platform_name
-        );
-    }
+        )
+    })?;
 
-    let to_download = to_download.unwrap();
     let url = to_download["browser_download_url"]
         .as_str()
         .ok_or(anyhow!("No download url found"))?;
@@ -108,7 +108,7 @@ pub fn download_binaries(build_dir: &Path, info: &ReleaseInfo, strip_debug: bool
 
     if let Some(checksum) = checksum {
         if checksum.to_lowercase() != hash.to_lowercase() {
-            bail!("Checksums do not match");
+            bail!("Checksums do not match for main binary");
         } else {
             #[cfg(feature = "colored")]
             info!("{}", "Checksums match".on_green());
@@ -117,7 +117,71 @@ pub fn download_binaries(build_dir: &Path, info: &ReleaseInfo, strip_debug: bool
         error!("No checksum found for {}", name);
     }
 
-    Ok(download_path)
+    // Download debug symbols if not stripping
+    let debug_symbols_path = if !strip_debug {
+        download_debug_symbols(build_dir, info, &target_os, arch_name)?
+    } else {
+        None
+    };
+
+    Ok((download_path, debug_symbols_path))
+}
+
+/// Downloads debug symbols (PDB for Windows, dSYM for macOS) if available.
+fn download_debug_symbols(
+    build_dir: &Path,
+    info: &ReleaseInfo,
+    target_os: &str,
+    arch_name: &str,
+) -> anyhow::Result<Option<PathBuf>> {
+    // Determine debug symbols file pattern based on platform
+    let (debug_marker, debug_extension, output_filename) = if target_os == "macos" {
+        ("dsym", ".tar.xz", "obs-prebuilt-macos-dsyms.tar.xz")
+    } else if target_os == "windows" {
+        ("pdb", ".zip", "obs-prebuilt-windows-pdbs.zip")
+    } else {
+        return Ok(None);
+    };
+
+    // Find debug symbols archive
+    let debug_asset = info.assets.iter().find(|e| {
+        let name = e["name"].as_str().unwrap_or("").to_lowercase();
+        name.contains("obs-studio")
+            && name.contains(debug_marker)
+            && name.contains(debug_extension)
+            && name.contains(arch_name)
+    });
+
+    let Some(debug_asset) = debug_asset else {
+        trace!("No debug symbols archive found for {}", target_os);
+        return Ok(None);
+    };
+
+    let url = debug_asset["browser_download_url"]
+        .as_str()
+        .ok_or(anyhow!("No download url found for debug symbols"))?;
+
+    let download_path = build_dir.join(output_filename);
+
+    #[cfg(feature = "colored")]
+    println!("Downloading debug symbols from {}", url.green());
+    let hash = download_file(url, &download_path)?;
+
+    let name = debug_asset["name"].as_str().unwrap_or("");
+    let checksum = &info.checksums.get(&name.to_lowercase());
+
+    if let Some(checksum) = checksum {
+        if checksum.to_lowercase() != hash.to_lowercase() {
+            bail!("Checksums do not match for debug symbols");
+        } else {
+            #[cfg(feature = "colored")]
+            info!("{}", "Debug symbols checksums match".on_green());
+        }
+    } else {
+        error!("No checksum found for debug symbols: {}", name);
+    }
+
+    Ok(Some(download_path))
 }
 
 /// Returns hash

@@ -343,8 +343,8 @@ fn build_obs(
 ) -> anyhow::Result<()> {
     fs::create_dir_all(build_out)?;
 
-    let obs_path = if let Some(e) = override_zip {
-        e
+    let (obs_path, debug_symbols_path) = if let Some(e) = override_zip {
+        (e, None)
     } else {
         download_binaries(build_out, &release, remove_pdbs)?
     };
@@ -384,10 +384,45 @@ fn build_obs(
         bail!("Unsupported archive format: {:?}", obs_path.extension());
     }
 
+    // Extract debug symbols if present
+    if let Some(debug_path) = &debug_symbols_path {
+        info!("Extracting debug symbols...");
+        extract_debug_symbols(debug_path, build_out)?;
+    }
+
     clean_up_files(build_out, remove_pdbs, include_browser)?;
 
     fs::remove_file(&obs_path)?;
+    if let Some(debug_path) = debug_symbols_path {
+        fs::remove_file(&debug_path)?;
+    }
 
+    Ok(())
+}
+
+/// Extracts debug symbols archive (PDB or dSYM) into the build output directory.
+fn extract_debug_symbols(debug_path: &Path, build_out: &Path) -> anyhow::Result<()> {
+    let ext = debug_path.extension().and_then(|s| s.to_str());
+
+    if ext == Some("zip") {
+        // Windows PDB zip
+        let archive_file = File::open(debug_path)?;
+        let mut archive = ZipArchive::new(&archive_file)?;
+        archive.extract(build_out)?;
+    } else if ext == Some("xz") {
+        // macOS dSYM tar.xz
+        let archive_file = File::open(debug_path)?;
+        let decompressor = XzDecoder::new(archive_file);
+        let mut archive = Archive::new(decompressor);
+        archive.unpack(build_out)?;
+    } else {
+        bail!(
+            "Unsupported debug symbols archive format: {:?}",
+            debug_path.extension()
+        );
+    }
+
+    info!("✓ Extracted debug symbols");
     Ok(())
 }
 
