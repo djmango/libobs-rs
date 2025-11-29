@@ -70,13 +70,19 @@ pub fn download_binaries(build_dir: &Path, info: &ReleaseInfo, strip_debug: bool
         // Examples:
         // Windows: OBS-Studio-32.0.2-Windows-x64.zip
         // macOS: OBS-Studio-32.0.2-macOS-Intel.dmg or OBS-Studio-32.0.2-macOS-Apple.dmg
-        name.contains("obs-studio")
+        let matches_basic = name.contains("obs-studio")
             && (name.contains(platform_name) || (target_os == "windows" && name.contains("full")))
             && name.contains(file_extension)
-            && !name.contains("pdb")
-            && !name.contains("dsym")  // Exclude debug symbols
-            && !name.contains("dbsym")
-            && name.contains(arch_name)
+            && name.contains(arch_name);
+
+        // Exclude debug symbols if strip_debug is enabled
+        let exclude_debug = if strip_debug {
+            !name.contains("pdb") && !name.contains("dsym") && !name.contains("dbsym")
+        } else {
+            !name.contains("pdb") && !name.contains("dbsym") // Keep dsym when not stripping
+        };
+
+        matches_basic && exclude_debug
     });
 
     if to_download.is_none() {
