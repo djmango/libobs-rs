@@ -5,6 +5,58 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+/// Set up macOS-specific files after OBS extraction
+/// Creates symlinks, fixes helper binaries, and sets up Frameworks directory
+pub fn setup_macos_files(target_out_dir: &Path) -> anyhow::Result<()> {
+    info!("Setting up macOS-specific files...");
+
+    // Create .so symlinks for graphics modules (OBS expects .so extension)
+    let graphics_modules = ["libobs-opengl.dylib", "libobs-metal.dylib"];
+    for module in &graphics_modules {
+        let dylib_path = target_out_dir.join(module);
+        if dylib_path.exists() {
+            let so_path = target_out_dir.join(module.replace(".dylib", ".so"));
+            // Remove existing symlink if present
+            if so_path.exists() {
+                fs::remove_file(&so_path)?;
+            }
+            // Create symlink
+            std::os::unix::fs::symlink(module, &so_path)?;
+            info!("Created symlink: {} -> {}", so_path.display(), module);
+        }
+    }
+
+    // Fix helper binaries (obs-ffmpeg-mux, etc.) to find dylibs
+    info!("Fixing helper binary rpaths...");
+    fix_helper_binaries_macos(target_out_dir)?;
+
+    // Create Frameworks directory for helper binaries
+    // obs-ffmpeg-mux runs from examples/ and looks in ../Frameworks/
+    let frameworks_dir = target_out_dir.join("Frameworks");
+    fs::create_dir_all(&frameworks_dir)?;
+
+    info!("Creating Frameworks symlinks...");
+    for entry in fs::read_dir(target_out_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if let Some(ext) = path.extension() {
+            if ext == "dylib" || ext == "framework" {
+                let name = path.file_name().unwrap();
+                let link_path = frameworks_dir.join(name);
+                if link_path.exists() || link_path.symlink_metadata().is_ok() {
+                    fs::remove_file(&link_path).ok();
+                }
+                // Relative symlink from Frameworks/ to ../file
+                let relative = format!("../{}", name.to_string_lossy());
+                std::os::unix::fs::symlink(&relative, &link_path)?;
+            }
+        }
+    }
+    info!("✓ Created Frameworks directory");
+
+    Ok(())
+}
+
 /// Extract macOS DMG file
 pub fn extract_dmg(dmg_path: &Path, output_dir: &Path) -> anyhow::Result<()> {
     info!("Mounting DMG...");
@@ -170,4 +222,19 @@ pub fn fix_helper_binaries_macos(output_dir: &Path) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Check if a path should be skipped during cleanup (macOS-specific)
+/// Skips Resources and _CodeSignature directories inside .framework bundles
+/// which are needed for code signing on macOS
+pub fn should_skip_entry(path: &Path) -> bool {
+    let file_name = path.file_name().and_then(|f| f.to_str());
+    if (file_name == Some("Resources") || file_name == Some("_CodeSignature"))
+        && path
+            .ancestors()
+            .any(|p| p.extension().and_then(|e| e.to_str()) == Some("framework"))
+    {
+        return true;
+    }
+    false
 }

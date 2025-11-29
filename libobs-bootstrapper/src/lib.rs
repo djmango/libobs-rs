@@ -99,6 +99,18 @@ fn get_obs_dll_path() -> anyhow::Result<PathBuf> {
         // Windows: Check for obs.dll
         Ok(parent.join("obs.dll"))
     }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Linux: Check for libobs.so (system-wide or local)
+        let local_path = parent.join("libobs.so");
+        if local_path.exists() {
+            Ok(local_path)
+        } else {
+            // Fall back to system library path
+            Ok(PathBuf::from("/usr/lib/libobs.so"))
+        }
+    }
 }
 
 pub(crate) fn bootstrap(

@@ -327,55 +327,7 @@ pub fn build_obs_binaries(config: ObsBuildConfig) -> anyhow::Result<()> {
 
     // macOS-specific post-processing
     #[cfg(target_os = "macos")]
-    {
-        info!("Setting up macOS-specific files...");
-
-        // Create .so symlinks for graphics modules (OBS expects .so extension)
-        let graphics_modules = ["libobs-opengl.dylib", "libobs-metal.dylib"];
-        for module in &graphics_modules {
-            let dylib_path = target_out_dir.join(module);
-            if dylib_path.exists() {
-                let so_path = target_out_dir.join(module.replace(".dylib", ".so"));
-                // Remove existing symlink if present
-                if so_path.exists() {
-                    fs::remove_file(&so_path)?;
-                }
-                // Create symlink
-                #[cfg(unix)]
-                std::os::unix::fs::symlink(module, &so_path)?;
-                info!("Created symlink: {} -> {}", so_path.display(), module);
-            }
-        }
-
-        // Fix helper binaries (obs-ffmpeg-mux, etc.) to find dylibs
-        info!("Fixing helper binary rpaths...");
-        macos::fix_helper_binaries_macos(&target_out_dir)?;
-
-        // Create Frameworks directory for helper binaries
-        // obs-ffmpeg-mux runs from examples/ and looks in ../Frameworks/
-        let frameworks_dir = target_out_dir.join("Frameworks");
-        fs::create_dir_all(&frameworks_dir)?;
-
-        info!("Creating Frameworks symlinks...");
-        for entry in fs::read_dir(&target_out_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if let Some(ext) = path.extension() {
-                if ext == "dylib" || ext == "framework" {
-                    let name = path.file_name().unwrap();
-                    let link_path = frameworks_dir.join(name);
-                    if link_path.exists() || link_path.symlink_metadata().is_ok() {
-                        fs::remove_file(&link_path).ok();
-                    }
-                    // Relative symlink from Frameworks/ to ../file
-                    let relative = format!("../{}", name.to_string_lossy());
-                    #[cfg(unix)]
-                    std::os::unix::fs::symlink(&relative, &link_path)?;
-                }
-            }
-        }
-        info!("✓ Created Frameworks directory");
-    }
+    macos::setup_macos_files(&target_out_dir)?;
 
     info!("Done!");
 
@@ -394,7 +346,7 @@ fn build_obs(
     let obs_path = if let Some(e) = override_zip {
         e
     } else {
-        download_binaries(build_out, &release)?
+        download_binaries(build_out, &release, remove_pdbs)?
     };
 
     info!("Extracting OBS Studio binaries...");
@@ -480,16 +432,8 @@ fn clean_up_files(
     let walker = WalkDir::new(build_out).into_iter().filter_entry(|_entry| {
         // Skip Resources and _CodeSignature directories inside .framework bundles (needed for code signing on macOS)
         #[cfg(target_os = "macos")]
-        {
-            let path = _entry.path();
-            let file_name = path.file_name().and_then(|f| f.to_str());
-            if (file_name == Some("Resources") || file_name == Some("_CodeSignature"))
-                && path
-                    .ancestors()
-                    .any(|p| p.extension().and_then(|e| e.to_str()) == Some("framework"))
-            {
-                return false; // Skip this entry and all its descendants
-            }
+        if macos::should_skip_entry(_entry.path()) {
+            return false;
         }
         true
     });

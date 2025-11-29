@@ -28,7 +28,7 @@ use crate::git::ReleaseInfo;
 
 const DEFAULT_REQ_TIMEOUT: u64 = 60 * 60;
 
-pub fn download_binaries(build_dir: &Path, info: &ReleaseInfo) -> anyhow::Result<PathBuf> {
+pub fn download_binaries(build_dir: &Path, info: &ReleaseInfo, strip_debug: bool) -> anyhow::Result<PathBuf> {
     // Determine platform-specific search criteria based on TARGET platform
     // Priority: OBS_BUILD_TARGET > CARGO_CFG_TARGET_OS > host platform
     let target_os = std::env::var("OBS_BUILD_TARGET_OS")
@@ -51,7 +51,12 @@ pub fn download_binaries(build_dir: &Path, info: &ReleaseInfo) -> anyhow::Result
         } else {
             "apple" // macOS uses "Apple" for arm64 (Apple Silicon)
         };
-        ("macos", ".dmg", "obs-prebuilt-macos.dmg", arch)
+        // Use tar.xz for stripped builds (smaller), DMG for full builds with debug info
+        if strip_debug {
+            ("macos", ".tar.xz", "obs-prebuilt-macos.tar.xz", arch)
+        } else {
+            ("macos", ".dmg", "obs-prebuilt-macos.dmg", arch)
+        }
     } else if target_os == "windows" {
         ("windows", ".zip", "obs-prebuilt-windows.zip", architecture)
     } else {
