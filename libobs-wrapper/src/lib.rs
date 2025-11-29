@@ -3,7 +3,6 @@
 pub mod context;
 pub mod crash_handler;
 pub mod data;
-#[cfg(any(windows, target_os = "macos"))]
 pub mod display;
 pub mod encoders;
 pub mod enums;
