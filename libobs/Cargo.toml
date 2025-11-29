@@ -1,11 +1,14 @@
 [package]
 name = "libobs"
-version = "3.0.1+32.0.2"
+version = "4.0.2+32.0.2"
 description = "LibOBS bindings for Rust"
-repository = "https://github.com/joshprk/libobs-rs"
-documentation = "https://joshprk.github.io/libobs-rs/libobs/"
+repository = "https://github.com/libobs-rs/libobs-rs"
+documentation = "https://libobs-rs.github.io/libobs-docs/libobs/"
 readme = "./README.md"
-authors = ["Joshua Park <joshprk@proton.me>", "Hendrik Lind <hendrik@sshcrack.me>"]
+authors = [
+    "Joshua Park <joshprk@proton.me>",
+    "Hendrik Lind <hendrik@sshcrack.me>",
+]
 categories = [
     "multimedia::video",
     "multimedia::audio",
@@ -17,18 +20,20 @@ license = "GPL-3.0"
 edition = "2021"
 build = "build.rs"
 
-[target.'cfg(target_family = "windows")'.build-dependencies]
-bindgen = { version = "0.72", optional = true }
-
-[target.'cfg(not(target_family = "windows"))'.build-dependencies]
-bindgen = "0.72"
+[build-dependencies]
+bindgen = "0.72.1"
+pkg-config = "0.3"
 
 [features]
 default = []
-generate_bindings = ["dep:bindgen"]
+generate_bindings = []
+include_win_bindings = ["generate_bindings"]
 
 [dev-dependencies]
 vsprintf = "2"
+
+[package.metadata.docs.rs]
+targets = ["x86_64-pc-windows-msvc"]
 
 [lints]
 workspace = true

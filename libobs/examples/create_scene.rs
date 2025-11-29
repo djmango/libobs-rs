@@ -4,9 +4,9 @@ use std::{
     ptr,
 };
 
-pub(crate) unsafe extern "C" fn main_crash_handler(
+pub(crate) unsafe extern "C" fn main_crash_handler<V>(
     _format: *const i8,
-    _args: *mut i8,
+    _args: *mut V,
     _params: *mut c_void,
 ) {
     println!("Some crash");
@@ -41,14 +41,12 @@ fn main() {
         }
 
         #[cfg(target_os = "windows")]
-        {
-            libobs::obs_init_win32_crash_handler();
+        libobs::obs_init_win32_crash_handler();
 
-            libobs::base_set_crash_handler(Some(main_crash_handler), std::ptr::null_mut());
-            println!("Setting log handler on Windows");
-            libobs::base_set_log_handler(Some(log_handler), ptr::null_mut());
-            println!("Log handler set successfully");
-        }
+        libobs::base_set_crash_handler(Some(main_crash_handler), std::ptr::null_mut());
+        println!("Setting log handler on Windows");
+        libobs::base_set_log_handler(Some(log_handler), ptr::null_mut());
+        println!("Log handler set successfully");
 
         println!("Retrieving libobs version string...");
         let version_ptr = libobs::obs_get_version_string();
@@ -76,15 +74,22 @@ fn main() {
         let curr_exe = curr_exe.parent().unwrap();
 
         println!("Adding module path");
-        
+
         // macOS uses .plugin bundles with %module% pattern, Windows uses 64bit subdirectory
         // Note: Examples run from target/debug/examples/, so go up one directory
         #[cfg(target_os = "macos")]
-        let module_bin_path = CString::new(curr_exe.join("../obs-plugins/%module%.plugin/Contents/MacOS").to_str().unwrap()).unwrap();
-        
+        let module_bin_path = CString::new(
+            curr_exe
+                .join("../obs-plugins/%module%.plugin/Contents/MacOS")
+                .to_str()
+                .unwrap(),
+        )
+        .unwrap();
+
         #[cfg(not(target_os = "macos"))]
-        let module_bin_path = CString::new(curr_exe.join("../obs-plugins/64bit/").to_str().unwrap()).unwrap();
-        
+        let module_bin_path =
+            CString::new(curr_exe.join("../obs-plugins/64bit/").to_str().unwrap()).unwrap();
+
         let module_path = curr_exe.join("../data/obs-plugins/%module%/");
         let module_data_path = module_path.to_str().unwrap();
         let module_data_path = CString::new(module_data_path).unwrap();
@@ -197,15 +202,15 @@ fn x_open_display(display: *mut c_void) -> *mut c_void {
     unsafe { XOpenDisplay(display) }
 }
 
-#[cfg(target_os = "windows")]
-pub(crate) unsafe extern "C" fn log_handler(
-    log_level: i32,
+pub(crate) unsafe extern "C" fn log_handler<V>(
+    log_level: std::os::raw::c_int,
     msg: *const i8,
-    args: *mut i8,
+    args: *mut V,
     _params: *mut c_void,
 ) {
     // Simple logger that prints directly to console
     // In a real-world application, you would use vsnprintf to format the message properly
+    let log_level = log_level as libobs::_bindgen_ty_1;
     let level_str = match log_level {
         libobs::LOG_ERROR => "ERROR",
         libobs::LOG_WARNING => "WARNING",
@@ -214,7 +219,7 @@ pub(crate) unsafe extern "C" fn log_handler(
         _ => "UNKNOWN",
     };
 
-    let formatted = vsprintf::vsprintf(msg, args);
+    let formatted = vsprintf::vsprintf(msg, args as *mut _);
     if formatted.is_err() {
         eprintln!("Failed to format log message");
         return;

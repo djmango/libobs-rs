@@ -1,19 +1,31 @@
+[build]
+rustflags = ["-Dwarnings"]
+
 # macOS configuration for finding libobs.framework and dylibs
 # These rpaths allow binaries to find OBS libraries relative to their location
 
 [target.aarch64-apple-darwin]
 rustflags = [
-  "-C", "link-arg=-Wl,-rpath,@executable_path",
-  "-C", "link-arg=-Wl,-rpath,@loader_path",  
-  "-C", "link-arg=-Wl,-rpath,@executable_path/..",
-  "-C", "link-arg=-Wl,-rpath,@loader_path/..",
+  "-Dwarnings",
+  "-C",
+  "link-arg=-Wl,-rpath,@executable_path",
+  "-C",
+  "link-arg=-Wl,-rpath,@loader_path",
+  "-C",
+  "link-arg=-Wl,-rpath,@executable_path/..",
+  "-C",
+  "link-arg=-Wl,-rpath,@loader_path/..",
 ]
 
 [target.x86_64-apple-darwin]
 rustflags = [
-  "-C", "link-arg=-Wl,-rpath,@executable_path",
-  "-C", "link-arg=-Wl,-rpath,@loader_path",
-  "-C", "link-arg=-Wl,-rpath,@executable_path/..",
-  "-C", "link-arg=-Wl,-rpath,@loader_path/..",
+  "-Dwarnings",
+  "-C",
+  "link-arg=-Wl,-rpath,@executable_path",
+  "-C",
+  "link-arg=-Wl,-rpath,@loader_path",
+  "-C",
+  "link-arg=-Wl,-rpath,@executable_path/..",
+  "-C",
+  "link-arg=-Wl,-rpath,@loader_path/..",
 ]
-

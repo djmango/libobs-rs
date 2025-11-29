@@ -1,0 +1,51 @@
+[package]
+name = "libobs-simple"
+description = "A simple and easy-to-use Rust wrapper around libobs-wrapper for recording and streaming."
+version = "5.0.5+32.0.2"
+repository = "https://github.com/libobs-rs/libobs-rs"
+documentation = "https://libobs-rs.github.io/libobs-docs/libobs_simple/"
+readme = "README.md"
+authors = ["Hendrik Lind <hendrik@sshcrack.me>"]
+categories = [
+    "multimedia::video",
+    "multimedia::audio",
+    "multimedia",
+    "multimedia::encoding",
+]
+keywords = ["obs", "libobs", "video", "recording", "screen-recording"]
+license = "GPL-3.0"
+edition = "2021"
+
+[dependencies]
+libobs = { workspace = true }
+libobs-wrapper = { workspace = true }
+libobs-simple-macro = { workspace = true }
+num-derive = "0.4.2"
+num-traits = "0.2.19"
+anyhow = "1.0.97"
+log = "0.4.27"
+paste = "1.0.15"
+
+display-info = "0.5"
+libobs-window-helper = { workspace = true, optional = true }
+
+[features]
+default = ["window-list", "enable_runtime"]
+generate_bindings = ["libobs/generate_bindings", "libobs-wrapper/generate_bindings"]
+window-list = ["dep:libobs-window-helper"]
+enable_runtime = ["libobs-wrapper/enable_runtime"]
+__test_environment = ["libobs-wrapper/__test_environment"]
+
+[dev-dependencies]
+env_logger = "0.11.8"
+serde_json = "1.0.145"
+libobs-wrapper = { workspace = true, features = ["__test_environment"], default-features = false}
+winit = "0.30.12"
+tokio = { version = "1", features = ["rt", "macros"] }
+ffmpeg-sidecar = "2.2.0"
+
+[package.metadata.docs.rs]
+targets = ["x86_64-pc-windows-msvc"]
+
+[lints]
+workspace = true

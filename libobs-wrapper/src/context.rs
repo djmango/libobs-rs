@@ -26,24 +26,24 @@
 //! ```no_run
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! use libobs_wrapper::context::ObsContext;
+//! use libobs_wrapper::utils::StartupInfo;
 //!
-//! let context = ObsContext::builder().start()?;
+//! let info = StartupInfo::default();
+//! let context = ObsContext::new(info)?;
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! For more examples refer to the [examples](https://github.com/joshprk/libobs-rs/tree/main/examples) directory in the repository.
+//! For more examples refer to the [examples](https://github.com/libobs-rs/libobs-rs/tree/main/examples) directory in the repository.
 
 use std::{
+    collections::HashMap,
     ffi::CStr,
     sync::{Arc, Mutex, RwLock},
     thread::ThreadId,
 };
 
-#[cfg(target_family = "windows")]
-use std::{collections::HashMap, pin::Pin};
-
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use crate::display::{ObsDisplayCreationData, ObsDisplayRef};
 use crate::{
     data::{output::ObsOutputRef, video::ObsVideoInfo, ObsData},
@@ -57,21 +57,11 @@ use crate::{
     utils::{FilterInfo, ObsError, ObsModules, ObsString, OutputInfo, StartupInfo},
 };
 use getters0::Getters;
-use libobs::{audio_output, obs_scene_t, video_output};
+use libobs::{audio_output, video_output};
 
 lazy_static::lazy_static! {
     pub(crate) static ref OBS_THREAD_ID: Mutex<Option<ThreadId>> = Mutex::new(None);
 }
-
-// Note to developers of this library:
-// I've updated everything in the ObsContext to use Rc and RefCell.
-// Then the obs context shutdown hook is given to each children of for example scenes and displays.
-// That way, obs is not shut down as long as there are still displays or scenes alive.
-// This is a bit of a hack, but it works would be glad to hear your thoughts on this.
-
-// Factor complex display map type out to satisfy clippy::type_complexity
-#[cfg(target_family = "windows")]
-pub(crate) type DisplayMap = HashMap<usize, Arc<Pin<Box<ObsDisplayRef>>>>;
 
 /// Interface to the OBS context. Only one context
 /// can exist across all threads and any attempt to
@@ -91,8 +81,8 @@ pub struct ObsContext {
     startup_info: Arc<RwLock<StartupInfo>>,
     #[get_mut]
     // Key is display id, value is the display fixed in heap
-    #[cfg(target_family = "windows")]
-    displays: Arc<RwLock<DisplayMap>>,
+    #[cfg(any(windows, target_os = "macos"))]
+    displays: Arc<RwLock<HashMap<usize, ObsDisplayRef>>>,
 
     /// Outputs must be stored in order to prevent
     /// early freeing.
@@ -103,12 +93,13 @@ pub struct ObsContext {
     #[get_mut]
     pub(crate) scenes: Arc<RwLock<Vec<ObsSceneRef>>>,
 
-    // Filters are on the level of the context because they are not scene specific
+    // Filters are on the level of the context because they are not scene-specific
     #[get_mut]
     pub(crate) filters: Arc<RwLock<Vec<ObsFilterRef>>>,
 
     #[skip_getter]
-    pub(crate) active_scene: Arc<RwLock<Option<Sendable<*mut obs_scene_t>>>>,
+    /// Contains active scenes mapped by their channel they are bound to
+    pub(crate) active_scenes: Arc<RwLock<HashMap<u32, ObsSceneRef>>>,
 
     #[skip_getter]
     pub(crate) _obs_modules: Arc<ObsModules>,
@@ -117,9 +108,40 @@ pub struct ObsContext {
     /// that everything else has been freed already before the runtime
     /// shuts down
     pub(crate) runtime: ObsRuntime,
+
+    #[cfg(target_os = "linux")]
+    pub(crate) glib_loop: Arc<RwLock<Option<crate::utils::linux::LinuxGlibLoop>>>,
 }
 
 impl ObsContext {
+    /// Checks if the installed OBS version matches the expected version.
+    /// Returns true if the major version matches, false otherwise.
+    pub fn check_version_compatibility() -> bool {
+        unsafe {
+            let version = libobs::obs_get_version_string();
+            if version.is_null() {
+                return false;
+            }
+
+            let version_str = match CStr::from_ptr(version).to_str() {
+                Ok(s) => s,
+                Err(_) => return false,
+            };
+
+            let version_parts: Vec<&str> = version_str.split('.').collect();
+            if version_parts.len() != 3 {
+                return false;
+            }
+
+            let major = match version_parts[0].parse::<u64>() {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
+
+            major == libobs::LIBOBS_API_MAJOR_VER as u64
+        }
+    }
+
     pub fn builder() -> StartupInfo {
         StartupInfo::new()
     }
@@ -137,34 +159,49 @@ impl ObsContext {
     /// period of time. Unfortunately the memory
     /// leak is caused by a bug in libobs itself.
     ///
-    /// If the `bootstrapper` feature is enabled, and ObsContextReturn::Restart is returned,
-    /// the application must be restarted to apply the updates and initialization can not continue.
+    /// On Linux, make sure to call `ObsContext::check_version_compatibility` before
+    /// initializing the context. If that method returns false, it may be possible for the binary to crash.
+    ///
+    /// If initialization fails, an `ObsError` is returned.
     pub fn new(info: StartupInfo) -> Result<ObsContext, ObsError> {
         // Spawning runtime, I'll keep this as function for now
         let (runtime, obs_modules, info) = ObsRuntime::startup(info)?;
+        #[cfg(target_os = "linux")]
+        let linux_opt = if info.start_glib_loop {
+            Some(crate::utils::linux::LinuxGlibLoop::new())
+        } else {
+            None
+        };
 
+        let active_scenes: Arc<RwLock<HashMap<u32, ObsSceneRef>>> = Default::default();
         Ok(Self {
             _obs_modules: Arc::new(obs_modules),
-            active_scene: Default::default(),
-            #[cfg(target_family = "windows")]
+            active_scenes: active_scenes.clone(),
+            #[cfg(any(windows, target_os = "macos"))]
             displays: Default::default(),
             outputs: Default::default(),
             scenes: Default::default(),
             filters: Default::default(),
-            runtime,
+            runtime: runtime.clone(),
             startup_info: Arc::new(RwLock::new(info)),
+            #[cfg(target_os = "linux")]
+            glib_loop: Arc::new(RwLock::new(linux_opt)),
         })
     }
 
     pub fn get_version(&self) -> Result<String, ObsError> {
-        let res = run_with_obs!(self.runtime, || unsafe {
+        Self::get_version_global()
+    }
+
+    pub fn get_version_global() -> Result<String, ObsError> {
+        unsafe {
             let version = libobs::obs_get_version_string();
             let version_cstr = CStr::from_ptr(version);
 
-            version_cstr.to_string_lossy().into_owned()
-        })?;
+            let version = version_cstr.to_string_lossy().into_owned();
 
-        Ok(res)
+            Ok(version)
+        }
     }
 
     pub fn log(&self, level: ObsLogLevel, msg: &str) {
@@ -319,16 +356,23 @@ impl ObsContext {
     }
 
     /// Creates a new display and returns its ID.
-    #[cfg(windows)]
-    //TODO
-    pub fn display(
+    ///
+    /// You must call `update_color_space` on the display when the window is moved, resized or the display settings change.
+    ///
+    /// Note: When calling `set_size` or `set_pos`, `update_color_space` is called automatically.
+    #[cfg(any(windows, target_os = "macos"))]
+    pub fn display(&mut self, data: ObsDisplayCreationData) -> Result<ObsDisplayRef, ObsError> {
+        self.inner_display_fn(data)
+    }
+
+    /// This function is used internally to create displays.
+    #[cfg(any(windows, target_os = "macos"))]
+    fn inner_display_fn(
         &mut self,
         data: ObsDisplayCreationData,
-    ) -> Result<Pin<Box<ObsDisplayRef>>, ObsError> {
+    ) -> Result<ObsDisplayRef, ObsError> {
         let display = ObsDisplayRef::new(data, self.runtime.clone())
             .map_err(|e| ObsError::DisplayCreationError(e.to_string()))?;
-
-        let display_clone = display.clone();
 
         let id = display.id();
         self.displays
@@ -336,16 +380,17 @@ impl ObsContext {
             .map_err(|_| {
                 ObsError::LockError("Failed to acquire write lock on displays".to_string())
             })?
-            .insert(id, Arc::new(display));
-        Ok(display_clone)
+            .insert(id, display.clone());
+
+        Ok(display)
     }
 
-    #[cfg(target_family = "windows")]
+    #[cfg(any(windows, target_os = "macos"))]
     pub fn remove_display(&mut self, display: &ObsDisplayRef) -> Result<(), ObsError> {
         self.remove_display_by_id(display.id())
     }
 
-    #[cfg(target_family = "windows")]
+    #[cfg(any(windows, target_os = "macos"))]
     pub fn remove_display_by_id(&mut self, id: usize) -> Result<(), ObsError> {
         self.displays
             .write()
@@ -357,11 +402,8 @@ impl ObsContext {
         Ok(())
     }
 
-    #[cfg(target_family = "windows")]
-    pub fn get_display_by_id(
-        &self,
-        id: usize,
-    ) -> Result<Option<Arc<Pin<Box<ObsDisplayRef>>>>, ObsError> {
+    #[cfg(any(windows, target_os = "macos"))]
+    pub fn get_display_by_id(&self, id: usize) -> Result<Option<ObsDisplayRef>, ObsError> {
         let d = self
             .displays
             .read()
@@ -417,7 +459,11 @@ impl ObsContext {
         &mut self,
         name: T,
     ) -> Result<ObsSceneRef, ObsError> {
-        let scene = ObsSceneRef::new(name.into(), self.active_scene.clone(), self.runtime.clone())?;
+        let scene = ObsSceneRef::new(
+            name.into(),
+            self.active_scenes.clone(),
+            self.runtime.clone(),
+        )?;
 
         let tmp = scene.clone();
         self.scenes

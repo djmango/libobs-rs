@@ -6,12 +6,12 @@ build = "build.rs"
 
 [dependencies]
 anyhow = "1.0.98"
+env_logger = "0.11.8"
 indicatif = "0.17.11"
 libobs-bootstrapper = { workspace = true }
 libobs-wrapper = { workspace = true }
-libobs-sources = { workspace = true }
+libobs-simple = { workspace = true }
 tokio = { version = "1.44.1", features = ["full"] }
-env_logger = "0.11"
 
 [[bin]]
 name = "record"

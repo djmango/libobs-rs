@@ -1,24 +1,27 @@
 # libobs-wrapper
 
 [![Crates.io](https://img.shields.io/crates/v/libobs-wrapper.svg)](https://crates.io/crates/libobs-wrapper)
-[![Documentation](https://docs.rs/libobs-wrapper/badge.svg)](https://docs.rs/libobs-wrapper)
 
 A safe, ergonomic Rust wrapper around the OBS (Open Broadcaster Software) Studio library. This crate provides a high-level interface for recording and streaming functionality using OBS's powerful capabilities, without having to deal with unsafe C/C++ code directly.
 
 ## Features
 
 - **Thread Safety**: Uses a dedicated thread to communicate with OBS, allowing safe cross-thread usage
-- **Async API**: Full async support with optional blocking API (via `blocking` feature)
 - **Resource Safety**: RAII-based resource management for OBS objects
-- **Runtime Bootstrapping**: Optional automatic download and setup of OBS binaries at runtime
+- **Runtime Bootstrapping**: Optional automatic download and setup of OBS binaries at runtime (functionality moved to [libobs-bootstrapper](https://crates.io/crates/libobs-bootstrapper))
 - **Scene Management**: Create and manipulate scenes, sources, and outputs
 - **Video Recording**: Configure and record video with various encoders
 - **Audio Support**: Configure audio sources and encoders
-- **Display Management**: Create and control OBS displays
+- **Display Management**: Create and control OBS preview windows
 
 ## Prerequisites
 
-The library needs OBS binaries in your target directory. There are multiple ways to set this up:
+The library needs OBS binaries in your target directory for Windows and MacOS.
+
+If you want to target Linux, you'll need to build and install OBS Studio from source. This can be done on Ubuntu using the `cargo-obs-build` tool (using `cargo obs-build install`), or by following the [official OBS build instructions](https://github.com/obsproject/obs-studio/wiki/Build-Instructions-For-Linux). Users of your application can just install OBS Studio via their package manager directly (tested and working for version 30+ on Ubuntu)
+
+
+For Windows and Macos, there are multiple ways to set this up:
 
 ### Option 1: Using cargo-obs-build (Recommended for development)
 
@@ -43,16 +46,16 @@ Install OBS in your target directory:
 
 ```bash
 # For debug builds
-cargo obs-build --out-dir target/debug
+cargo obs-build build --out-dir target/debug
 
 # For release builds
-cargo obs-build --out-dir target/release
+cargo obs-build build --out-dir target/release
 
 # For testing
-cargo obs-build --out-dir target/(debug|release)/deps
+cargo obs-build build --out-dir target/(debug|release)/deps
 ```
 
-More details can be found in the [cargo-obs-build documentation](./cargo-obs-build/README.md).
+More details can be found in the [cargo-obs-build documentation](../cargo-obs-build/README.md).
 
 ### Option 2: Using the OBS Bootstrapper (Recommended for distribution)
 
@@ -65,17 +68,19 @@ See the [libobs-bootstrapper documentation](https://docs.rs/libobs-bootstrapper)
 ## Advanced Usage
 
 For more advanced usage examples, check out:
-- Monitor capture example with full configuration: [examples/monitor_capture.rs](../examples/monitor_capture.rs)
-- Tauri integration example: [examples/tauri-app](../examples/tauri-app)
+
+- Monitor capture example with full configuration: [examples/monitor_capture](../examples/monitor-capture)
 - Runtime bootstrapping example: [examples/download-at-runtime](../examples/download-at-runtime)
 
-For even easier source creation and management, consider using the [`libobs-sources`](https://crates.io/crates/libobs-sources) crate which builds on top of this wrapper.
+For even easier handling, consider using the [`libobs-simple`](https://crates.io/crates/libobs-simple) crate which
+builds on top of this wrapper.
 
 ## Features
 - `no_blocking_drops` - Spawns a tokio thread using `tokio::task::spawn_blocking`, so drops don't block your Application (experimental, make sure you have a tokio runtime running)
 - `generate_bindings` - When enabled, forces the underlying bindings from `libobs` to generate instead of using the cached ones.
-- `color-logger` - Enables coloring for the console
-- `dialog_crash_handler` - Adds a default crash handler, which shows the error and an option to copy the stacktrace to the clipboard
+- `color-logger` - Enables coloring for the console. **On by default**.
+- `dialog_crash_handler` - Adds a default crash handler, which shows the error and an option to copy the stacktrace to the clipboard. **On by default**. If turned off, OBS crashes will be reported via `stderr`, unless `logging_crash_handler` is enabled, in which case they will be reported via `log::error!`.
+- `logging_crash_handler` - Sets the non-`dialog_crash_handler` default crash handler to report crashes via `log::error!`, instead of through `stderr`.
 
 ## Common Issues
 

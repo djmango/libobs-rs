@@ -22,12 +22,12 @@ mod replay_buffer;
 pub use replay_buffer::*;
 
 #[derive(Debug)]
-struct _ObsDropGuard {
+struct _ObsOutputDropGuard {
     output: Sendable<*mut obs_output>,
     runtime: ObsRuntime,
 }
 
-impl_obs_drop!(_ObsDropGuard, (output), move || unsafe {
+impl_obs_drop!(_ObsOutputDropGuard, (output), move || unsafe {
     libobs::obs_output_release(output);
 });
 
@@ -44,6 +44,9 @@ impl_obs_drop!(_ObsDropGuard, (output), move || unsafe {
 /// The output is associated with video and audio encoders that convert
 /// raw media to the required format before sending/storing.
 pub struct ObsOutputRef {
+    /// Disconnect signals first
+    pub(crate) signal_manager: Arc<ObsOutputSignals>,
+
     /// Settings for the output
     pub(crate) settings: Arc<RwLock<Option<ObsData>>>,
 
@@ -68,21 +71,12 @@ pub struct ObsOutputRef {
     /// The unique name of this output
     pub(crate) name: ObsString,
 
-    /// RAII guard that ensures proper cleanup when the output is dropped
-    #[skip_getter]
-    _drop_guard: Arc<_ObsDropGuard>,
-
     #[skip_getter]
     pub(crate) runtime: ObsRuntime,
 
-    /// Signal manager for subscribing to OBS output events
-    /// 
-    /// Provides access to output signals like:
-    /// - `on_start()`: Output successfully started (equivalent to OBS_WEBSOCKET_OUTPUT_STARTED)
-    /// - `on_stop()`: Output stopped
-    /// - `on_pause()`: Output paused
-    /// - And more...
-    pub signal_manager: Arc<ObsOutputSignals>,
+    /// RAII guard that ensures proper cleanup when the output is dropped
+    #[skip_getter]
+    _drop_guard: Arc<_ObsOutputDropGuard>,
 }
 
 impl ObsOutputRef {
@@ -144,7 +138,7 @@ impl ObsOutputRef {
             id,
             name,
 
-            _drop_guard: Arc::new(_ObsDropGuard {
+            _drop_guard: Arc::new(_ObsOutputDropGuard {
                 output,
                 runtime: runtime.clone(),
             }),

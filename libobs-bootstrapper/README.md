@@ -5,6 +5,8 @@
 
 A utility crate for automatically downloading and installing OBS (Open Broadcaster Software) Studio binaries at runtime. This crate is part of the libobs-rs ecosystem and is designed to make distributing OBS-based applications easier by handling the setup of OBS binaries.
 
+Note: This crate currently supports Windows and MacOS platforms. Refer to the libobs-wrapper documentation for Linux setup instructions [here](../libobs-wrapper/README.md).
+
 ## Features
 
 - **Automatic OBS Download**: Downloads appropriate OBS binaries at runtime
@@ -21,8 +23,7 @@ Add the crate to your dependencies:
 
 ```toml
 [dependencies]
-libobs-bootstrapper = "0.1.0"
-async-trait = "0.1"  # For implementing the bootstrap status handler
+libobs-bootstrapper = "0.2.0"
 ```
 
 ### Basic Example
@@ -31,10 +32,9 @@ Here's a simple example using the default console handler:
 
 ```rust
 use libobs_bootstrapper::{
-    ObsBootstrapper,
-    ObsBootstrapperOptions,
-    ObsBootstrapConsoleHandler,
+    ObsBootstrapper, ObsBootstrapperOptions, ObsBootstrapperResult
 };
+use libobs_wrapper::{context::ObsContext, utils::StartupInfo};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -54,6 +54,13 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    let context = ObsContext::new(StartupInfo::default()).unwrap();
+
+    println!("Done");
+    // Use the context here
+    // For example creating new obs data
+    context.data().unwrap();
+    
     Ok(())
 }
 ```
@@ -77,21 +84,20 @@ impl CustomProgressHandler {
                 .template("{msg}\n{wide_bar} {pos}/{len}")
                 .unwrap(),
         );
-        
+
         bar.set_message("Initializing bootstrapper...");
         Self(Arc::new(bar))
     }
 }
 
-#[async_trait::async_trait]
 impl ObsBootstrapStatusHandler for CustomProgressHandler {
-    async fn handle_downloading(&mut self, prog: f32, msg: String) -> anyhow::Result<()> {
+    fn handle_downloading(&mut self, prog: f32, msg: String) -> anyhow::Result<()> {
         self.0.set_message(msg);
         self.0.set_position((prog * 100.0) as u64);
         Ok(())
     }
-    
-    async fn handle_extraction(&mut self, prog: f32, msg: String) -> anyhow::Result<()> {
+
+    fn handle_extraction(&mut self, prog: f32, msg: String) -> anyhow::Result<()> {
         self.0.set_message(msg);
         self.0.set_position(100 + (prog * 100.0) as u64);
         Ok(())

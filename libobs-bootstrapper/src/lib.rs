@@ -1,15 +1,20 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
-use std::{env, path::PathBuf, process};
+use std::{env, path::PathBuf};
+
+#[cfg(not(target_os = "macos"))]
+use std::process;
 
 use anyhow::Context;
 use async_stream::stream;
 use download::DownloadStatus;
 use extract::ExtractStatus;
 use futures_core::Stream;
-use futures_util::{StreamExt, pin_mut};
+use futures_util::{pin_mut, StreamExt};
 use lazy_static::lazy_static;
 use libobs::{LIBOBS_API_MAJOR_VER, LIBOBS_API_MINOR_VER, LIBOBS_API_PATCH_VER};
+
+#[cfg(not(target_os = "macos"))]
 use tokio::{fs::File, io::AsyncWriteExt, process::Command};
 
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -61,11 +66,11 @@ pub enum BootstrapStatus {
 /// - Add a `obs.dll` file to your executable directory. This file will be replaced by the obs installer.
 ///   Recommended to use is the dll dummy (found [here](https://github.com/sshcrack/libobs-builds/releases), make sure you use the correct OBS version)
 ///   and rename it to `obs.dll`.
-/// - Call `ObsBootstrapper::bootstrap()` at the start of your application. Options must be configured. For more documentation look at the [tauri example app](https://github.com/joshprk/libobs-rs/tree/main/examples/tauri-app). This will download the latest version of OBS and extract it in the executable directory.
-/// - If BootstrapStatus::RestartRequired is returned, call `ObsBootstrapper::spawn_updater()` to spawn the updater process.
+/// - Call `ObsBootstrapper::bootstrap()` at the start of your application. Options must be configured. For more documentation look at the [tauri example app](https://github.com/libobs-rs/libobs-rs/tree/main/examples/tauri-app). This will download the latest version of OBS and extract it in the executable directory.
+/// - If BootstrapStatus::RestartRequired is returned, you'll need to restart your application. A updater process has been spawned to watch for the application to exit and rename the `obs_new.dll` file to `obs.dll`.
 /// - Exit the application. The updater process will wait for the application to exit and rename the `obs_new.dll` file to `obs.dll` and restart your application with the same arguments as before.
 ///
-/// [Example project](https://github.com/joshprk/libobs-rs/tree/main/examples/download-at-runtime)
+/// [Example project](https://github.com/libobs-rs/libobs-rs/tree/main/examples/download-at-runtime)
 pub struct ObsBootstrapper {}
 
 lazy_static! {
@@ -113,6 +118,7 @@ pub(crate) fn bootstrap(
         return Ok(None);
     }
 
+    #[allow(unused_variables)]
     let options = options.clone();
     Ok(Some(stream! {
         log::debug!("Downloading OBS from {}", repo);
@@ -195,6 +201,7 @@ pub(crate) fn bootstrap(
     }))
 }
 
+#[cfg(not(target_os = "macos"))]
 pub(crate) async fn spawn_updater(options: ObsBootstrapperOptions) -> anyhow::Result<()> {
     let pid = process::id();
     let args = env::args().collect::<Vec<_>>();
