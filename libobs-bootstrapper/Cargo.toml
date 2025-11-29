@@ -1,10 +1,11 @@
 [package]
 name = "libobs-bootstrapper"
-version = "0.1.1"
+version = "0.2.2"
 build = "build.rs"
 description = "Downloads OBS binaries at runtime and bootstraps libobs"
 readme = "./README.md"
-repository = "https://github.com/joshprk/libobs-rs"
+repository = "https://github.com/libobs-rs/libobs-rs"
+documentation = "https://libobs-rs.github.io/libobs-docs/libobs_bootstrapper/"
 authors = ["Hendrik Lind <hendrik@sshcrack.me>"]
 edition = "2024"
 categories = [
@@ -39,6 +40,9 @@ log = "0.4"
 default = ["install_dummy_dll"]
 generate_bindings = ["libobs/generate_bindings"]
 install_dummy_dll = []
+
+[package.metadata.docs.rs]
+targets = ["x86_64-pc-windows-msvc"]
 
 [lints]
 workspace = true
