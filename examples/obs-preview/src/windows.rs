@@ -1,8 +1,8 @@
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
-use libobs_sources::windows::GameCaptureSourceBuilder;
-use libobs_sources::windows::{ObsGameCaptureMode, WindowSearchMode};
+use libobs_simple::sources::windows::GameCaptureSourceBuilder;
+use libobs_simple::sources::windows::{ObsGameCaptureMode, WindowSearchMode};
 use libobs_wrapper::data::video::ObsVideoInfoBuilder;
 use libobs_wrapper::display::{ObsDisplayCreationData, ObsDisplayRef, WindowPositionTrait};
 use libobs_wrapper::encoders::{ObsAudioEncoderType, ObsContextEncoders, ObsVideoEncoderType};
