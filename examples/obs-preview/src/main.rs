@@ -20,7 +20,6 @@ use libobs_simple::sources::windows::{
 #[cfg(windows)]
 use libobs_simple::sources::ObsObjectUpdater;
 use libobs_wrapper::data::video::ObsVideoInfoBuilder;
-#[cfg(any(windows, target_os = "macos"))]
 use libobs_wrapper::display::{
     ObsDisplayCreationData, ObsDisplayRef, ObsWindowHandle, ShowHideTrait, WindowPositionTrait,
 };
