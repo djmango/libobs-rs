@@ -43,7 +43,6 @@ use std::{
     thread::ThreadId,
 };
 
-#[cfg(any(windows, target_os = "macos"))]
 use crate::display::{ObsDisplayCreationData, ObsDisplayRef};
 use crate::{
     data::{output::ObsOutputRef, video::ObsVideoInfo, ObsData},
@@ -81,7 +80,6 @@ pub struct ObsContext {
     startup_info: Arc<RwLock<StartupInfo>>,
     #[get_mut]
     // Key is display id, value is the display fixed in heap
-    #[cfg(any(windows, target_os = "macos"))]
     displays: Arc<RwLock<HashMap<usize, ObsDisplayRef>>>,
 
     /// Outputs must be stored in order to prevent
@@ -177,7 +175,6 @@ impl ObsContext {
         Ok(Self {
             _obs_modules: Arc::new(obs_modules),
             active_scenes: active_scenes.clone(),
-            #[cfg(any(windows, target_os = "macos"))]
             displays: Default::default(),
             outputs: Default::default(),
             scenes: Default::default(),
@@ -360,13 +357,11 @@ impl ObsContext {
     /// You must call `update_color_space` on the display when the window is moved, resized or the display settings change.
     ///
     /// Note: When calling `set_size` or `set_pos`, `update_color_space` is called automatically.
-    #[cfg(any(windows, target_os = "macos"))]
     pub fn display(&mut self, data: ObsDisplayCreationData) -> Result<ObsDisplayRef, ObsError> {
         self.inner_display_fn(data)
     }
 
     /// This function is used internally to create displays.
-    #[cfg(any(windows, target_os = "macos"))]
     fn inner_display_fn(
         &mut self,
         data: ObsDisplayCreationData,
@@ -385,12 +380,10 @@ impl ObsContext {
         Ok(display)
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
     pub fn remove_display(&mut self, display: &ObsDisplayRef) -> Result<(), ObsError> {
         self.remove_display_by_id(display.id())
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
     pub fn remove_display_by_id(&mut self, id: usize) -> Result<(), ObsError> {
         self.displays
             .write()
@@ -402,7 +395,6 @@ impl ObsContext {
         Ok(())
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
     pub fn get_display_by_id(&self, id: usize) -> Result<Option<ObsDisplayRef>, ObsError> {
         let d = self
             .displays
