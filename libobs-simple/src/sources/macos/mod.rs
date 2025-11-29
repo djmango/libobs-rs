@@ -5,10 +5,7 @@
 //! the actual capture implementation using ScreenCaptureKit.
 //!
 //! Available sources:
-//! - screen_capture - Entire screen/monitor capture
-//! - display_capture - Display capture  
-//! - window_capture - Individual window capture
-//! - Audio capture devices
+//! - [`ScreenCaptureSourceBuilder`] - Entire screen/monitor capture
 
 pub mod sources;
 

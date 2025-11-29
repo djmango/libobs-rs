@@ -16,9 +16,7 @@ pub enum ExtractStatus {
 
 type ExtractStream = Pin<Box<dyn Stream<Item = ExtractStatus> + Send>>;
 
-pub(crate) async fn extract_obs(
-    archive_file: &Path,
-) -> anyhow::Result<ExtractStream> {
+pub(crate) async fn extract_obs(archive_file: &Path) -> anyhow::Result<ExtractStream> {
     log::info!("Extracting OBS at {}", archive_file.display());
 
     let path = PathBuf::from(archive_file);
@@ -107,20 +105,20 @@ pub(crate) async fn extract_obs(
 async fn extract_dmg(dmg_path: &Path, output_dir: &Path) -> anyhow::Result<ExtractStream> {
     use tokio::process::Command;
     use uuid::Uuid;
-    
+
     let mount_point = PathBuf::from("/tmp").join(format!("obs-mount-{}", Uuid::new_v4()));
     let dmg_path_buf = dmg_path.to_path_buf();
     let output_dir_buf = output_dir.to_path_buf();
-    
+
     let stream = stream! {
         let dmg_path = &dmg_path_buf;
         let output_dir = &output_dir_buf;
-        
+
         yield Ok((0.0, "Mounting DMG...".to_string()));
-        
+
         // Create mount point
         tokio::fs::create_dir_all(&mount_point).await?;
-        
+
         // Mount the DMG
         let mount_output = Command::new("hdiutil")
             .args(["attach", "-nobrowse", "-mountpoint"])
@@ -128,15 +126,15 @@ async fn extract_dmg(dmg_path: &Path, output_dir: &Path) -> anyhow::Result<Extra
             .arg(dmg_path)
             .output()
             .await?;
-        
+
         if !mount_output.status.success() {
             let error_msg = String::from_utf8_lossy(&mount_output.stderr);
             yield Err(anyhow::anyhow!("Failed to mount DMG: {}", error_msg));
             return;
         }
-        
+
         yield Ok((0.3, "Copying files...".to_string()));
-        
+
         // Copy OBS.app contents
         let app_path = mount_point.join("OBS.app/Contents");
         if !app_path.exists() {
@@ -144,16 +142,16 @@ async fn extract_dmg(dmg_path: &Path, output_dir: &Path) -> anyhow::Result<Extra
             yield Err(anyhow::anyhow!("OBS.app not found in DMG"));
             return;
         }
-        
+
         // Create output directory
         if let Err(e) = tokio::fs::create_dir_all(&output_dir).await {
             let _ = Command::new("hdiutil").args(["detach"]).arg(&mount_point).output().await;
             yield Err(e.into());
             return;
         }
-        
+
         yield Ok((0.4, "Copying Frameworks...".to_string()));
-        
+
         // Copy Frameworks (contains libobs.dylib and dependencies)
         let frameworks_path = app_path.join("Frameworks");
         if frameworks_path.exists()
@@ -162,9 +160,9 @@ async fn extract_dmg(dmg_path: &Path, output_dir: &Path) -> anyhow::Result<Extra
                 yield Err(e);
                 return;
             }
-        
+
         yield Ok((0.7, "Copying PlugIns...".to_string()));
-        
+
         // Copy PlugIns
         let plugins_path = app_path.join("PlugIns");
         if plugins_path.exists() {
@@ -175,9 +173,9 @@ async fn extract_dmg(dmg_path: &Path, output_dir: &Path) -> anyhow::Result<Extra
                 return;
             }
         }
-        
+
         yield Ok((0.9, "Copying Resources...".to_string()));
-        
+
         // Copy Resources/data
         let data_path = app_path.join("Resources/data");
         if data_path.exists() {
@@ -188,26 +186,26 @@ async fn extract_dmg(dmg_path: &Path, output_dir: &Path) -> anyhow::Result<Extra
                 return;
             }
         }
-        
+
         yield Ok((0.95, "Unmounting DMG...".to_string()));
-        
+
         // Unmount
         let unmount_output = Command::new("hdiutil")
             .args(["detach"])
             .arg(&mount_point)
             .output()
             .await?;
-        
+
         if !unmount_output.status.success() {
             log::warn!("Failed to unmount DMG cleanly, but files were copied");
         }
-        
+
         // Clean up mount point
         let _ = tokio::fs::remove_dir(&mount_point).await;
-        
+
         yield Ok((1.0, "Extraction complete".to_string()));
     };
-    
+
     Ok(Box::pin(stream! {
         pin_mut!(stream);
         while let Some(status) = stream.next().await {
@@ -226,19 +224,15 @@ async fn extract_dmg(dmg_path: &Path, output_dir: &Path) -> anyhow::Result<Extra
 #[cfg(target_os = "macos")]
 async fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
     use tokio::process::Command;
-    
+
     // Use ditto to preserve code signatures and extended attributes on macOS
     tokio::fs::create_dir_all(dst.parent().unwrap_or(dst)).await?;
-    
-    let status = Command::new("ditto")
-        .arg(src)
-        .arg(dst)
-        .status()
-        .await?;
-    
+
+    let status = Command::new("ditto").arg(src).arg(dst).status().await?;
+
     if !status.success() {
         anyhow::bail!("ditto failed copying {:?} to {:?}", src, dst);
     }
-    
+
     Ok(())
 }

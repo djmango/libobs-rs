@@ -560,7 +560,12 @@ impl ObsRuntime {
 
                 #[cfg(any(feature = "__test_environment", test))]
                 {
-                    assert!(allocs <= MAX_EXPECTED_LEAKS, "Too many memory leaks detected: {} (max expected: {})", allocs, MAX_EXPECTED_LEAKS);
+                    assert!(
+                        allocs <= MAX_EXPECTED_LEAKS,
+                        "Too many memory leaks detected: {} (max expected: {})",
+                        allocs,
+                        MAX_EXPECTED_LEAKS
+                    );
                 }
             }
             Err(_) => {

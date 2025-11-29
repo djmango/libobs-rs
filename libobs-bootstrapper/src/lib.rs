@@ -10,7 +10,7 @@ use async_stream::stream;
 use download::DownloadStatus;
 use extract::ExtractStatus;
 use futures_core::Stream;
-use futures_util::{pin_mut, StreamExt};
+use futures_util::{StreamExt, pin_mut};
 use lazy_static::lazy_static;
 use libobs::{LIBOBS_API_MAJOR_VER, LIBOBS_API_MINOR_VER, LIBOBS_API_PATCH_VER};
 
@@ -87,13 +87,13 @@ fn get_obs_dll_path() -> anyhow::Result<PathBuf> {
     let parent = executable
         .parent()
         .ok_or_else(|| anyhow::anyhow!("Failed to get parent directory"))?;
-    
+
     #[cfg(target_os = "macos")]
     {
         // macOS: Check for libobs.framework
         Ok(parent.join("libobs.framework/Versions/A/libobs"))
     }
-    
+
     #[cfg(target_os = "windows")]
     {
         // Windows: Check for obs.dll

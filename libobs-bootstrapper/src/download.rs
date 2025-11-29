@@ -35,7 +35,7 @@ pub(crate) async fn download_obs(repo: &str) -> anyhow::Result<impl Stream<Item 
         } else {
             release.tag_name.replace("obs-build-", "")
         };
-        
+
         // Remove leading 'v' if present for version parsing
         let tag_for_parse = tag.trim_start_matches('v');
         let version = match Version::parse(tag_for_parse) {
@@ -63,13 +63,17 @@ pub(crate) async fn download_obs(repo: &str) -> anyhow::Result<impl Stream<Item 
         ))?;
 
     // Platform-specific asset selection (use target platform for cross-compilation)
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS")
-        .unwrap_or_else(|_| std::env::consts::OS.to_string());
+    let target_os =
+        std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_else(|_| std::env::consts::OS.to_string());
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH")
         .unwrap_or_else(|_| std::env::consts::ARCH.to_string());
-    
+
     let (asset_extension, file_extension) = if target_os == "macos" {
-        let arch = if target_arch == "x86_64" { "Intel" } else { "Apple" };
+        let arch = if target_arch == "x86_64" {
+            "Intel"
+        } else {
+            "Apple"
+        };
         (format!("macOS-{}.dmg", arch), "dmg")
     } else {
         (".7z".to_string(), "7z")
@@ -79,7 +83,10 @@ pub(crate) async fn download_obs(repo: &str) -> anyhow::Result<impl Stream<Item 
         .assets
         .iter()
         .find(|a| a.name.contains(&asset_extension) && !a.name.contains("dSYM"))
-        .context(format!("Finding {} asset with pattern: {}", file_extension, asset_extension))?
+        .context(format!(
+            "Finding {} asset with pattern: {}",
+            file_extension, asset_extension
+        ))?
         .browser_download_url
         .clone();
 
@@ -103,9 +110,10 @@ pub(crate) async fn download_obs(repo: &str) -> anyhow::Result<impl Stream<Item 
 
     let mut bytes_stream = res.bytes_stream();
 
-    let path = PathBuf::new()
-        .join(temp_dir())
-        .join(format!("{}.{}", Uuid::new_v4(), file_extension));
+    let path =
+        PathBuf::new()
+            .join(temp_dir())
+            .join(format!("{}.{}", Uuid::new_v4(), file_extension));
     let mut tmp_file = File::create_new(&path)
         .await
         .context("Creating temporary file")?;

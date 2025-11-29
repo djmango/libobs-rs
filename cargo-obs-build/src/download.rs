@@ -37,19 +37,19 @@ pub fn download_binaries(build_dir: &Path, info: &ReleaseInfo) -> anyhow::Result
     let target_arch = std::env::var("OBS_BUILD_TARGET_ARCH")
         .or_else(|_| std::env::var("CARGO_CFG_TARGET_ARCH"))
         .unwrap_or_else(|_| std::env::consts::ARCH.to_string());
-    
+
     // Map Rust architecture names to OBS naming
     let architecture = if target_arch == "x86_64" {
         "x64"
     } else {
         "arm64"
     };
-    
+
     let (platform_name, file_extension, output_filename, arch_name) = if target_os == "macos" {
         let arch = if target_arch == "x86_64" {
-            "intel"  // macOS uses "Intel" for x86_64
+            "intel" // macOS uses "Intel" for x86_64
         } else {
-            "apple"  // macOS uses "Apple" for arm64 (Apple Silicon)
+            "apple" // macOS uses "Apple" for arm64 (Apple Silicon)
         };
         ("macos", ".dmg", "obs-prebuilt-macos.dmg", arch)
     } else if target_os == "windows" {
@@ -58,7 +58,7 @@ pub fn download_binaries(build_dir: &Path, info: &ReleaseInfo) -> anyhow::Result
         // Linux not supported - require manual obs-studio installation
         bail!("Linux OBS download not supported - install obs-studio manually");
     };
-    
+
     let to_download = &info.assets.iter().find(|e| {
         let name = e["name"].as_str().unwrap_or("").to_lowercase();
 
@@ -75,7 +75,10 @@ pub fn download_binaries(build_dir: &Path, info: &ReleaseInfo) -> anyhow::Result
     });
 
     if to_download.is_none() {
-        bail!("No OBS Studio binaries found for platform: {}", platform_name);
+        bail!(
+            "No OBS Studio binaries found for platform: {}",
+            platform_name
+        );
     }
 
     let to_download = to_download.unwrap();

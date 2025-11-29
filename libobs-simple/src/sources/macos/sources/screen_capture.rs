@@ -1,13 +1,13 @@
 //! Screen capture source for macOS
-//! 
+//!
 //! Bindings to OBS's `screen_capture` source which internally uses ScreenCaptureKit.
 //! This source captures the entire screen or a specific display.
 
-use libobs_source_macro::obs_object_impl;
+use libobs_simple_macro::obs_object_impl;
 use libobs_wrapper::data::ObsObjectBuilder;
 use libobs_wrapper::sources::ObsSourceRef;
 
-use crate::macro_helper::define_object_manager;
+use crate::sources::macro_helper::define_object_manager;
 
 define_object_manager!(
     /// Builder for the screen capture source on macOS.
@@ -34,7 +34,10 @@ impl ScreenCaptureSource {
 }
 
 impl libobs_wrapper::sources::ObsSourceBuilder for ScreenCaptureSourceBuilder {
-    fn add_to_scene(self, scene: &mut libobs_wrapper::scenes::ObsSceneRef) -> Result<libobs_wrapper::sources::ObsSourceRef, libobs_wrapper::utils::ObsError>
+    fn add_to_scene(
+        self,
+        scene: &mut libobs_wrapper::scenes::ObsSceneRef,
+    ) -> Result<libobs_wrapper::sources::ObsSourceRef, libobs_wrapper::utils::ObsError>
     where
         Self: Sized,
     {
@@ -42,4 +45,3 @@ impl libobs_wrapper::sources::ObsSourceBuilder for ScreenCaptureSourceBuilder {
         scene.add_source(source)
     }
 }
-
