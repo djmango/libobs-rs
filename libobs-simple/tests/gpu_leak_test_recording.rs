@@ -6,13 +6,11 @@ use std::{path::PathBuf, process::Command, time::Duration};
 
 use libobs_simple::sources::windows::{ObsWindowCaptureMethod, WindowCaptureSourceBuilder};
 use libobs_wrapper::{sources::ObsSourceBuilder, utils::ObsPath};
-use serial_test::serial;
 
 use common::{assert_not_black, find_notepad, initialize_obs};
 
 /// Stage 6: Initialize OBS, create output with encoders, scene, add source, and record
 #[test]
-#[serial]
 pub fn test_recording() {
     let rec_file = ObsPath::from_relative("leak_test_recording.mp4");
     let path_out: PathBuf = rec_file.clone().into();

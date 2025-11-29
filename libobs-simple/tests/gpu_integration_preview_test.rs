@@ -36,7 +36,6 @@ use winit::platform::windows::EventLoopBuilderExtWindows;
 use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::{Window, WindowId};
-use serial_test::serial;
 
 #[derive(Clone)]
 struct ObsInner {
@@ -275,7 +274,6 @@ impl ApplicationHandler for App {
 }
 
 #[test]
-#[serial]
 pub fn test_preview() -> anyhow::Result<()> {
     let event_loop = EventLoopBuilder::default()
         .with_any_thread(true)

@@ -4,11 +4,9 @@ use libobs_wrapper::{
     context::ObsContext,
     utils::{ObsString, OutputInfo, StartupInfo},
 };
-use serial_test::serial;
 
 /// Integration test: Test output creation
 #[test]
-#[serial]
 pub fn test_output_creation() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
         .is_test(true)
@@ -29,7 +27,6 @@ pub fn test_output_creation() {
 
 /// Integration test: Test multiple output creation
 #[test]
-#[serial]
 pub fn test_multiple_outputs() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
         .is_test(true)
@@ -58,7 +55,6 @@ pub fn test_multiple_outputs() {
 
 /// Integration test: Test output lifecycle
 #[test]
-#[serial]
 pub fn test_output_lifecycle() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
         .is_test(true)
@@ -85,7 +81,6 @@ pub fn test_output_lifecycle() {
 
 /// Integration test: Test output with different settings
 #[test]
-#[serial]
 pub fn test_output_different_settings() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
         .is_test(true)

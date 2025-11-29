@@ -1,9 +1,7 @@
 use libobs_wrapper::{context::ObsContext, data::ObsDataGetters, utils::StartupInfo};
-use serial_test::serial;
 
 /// Integration test: Test encoder settings manipulation
 #[test]
-#[serial]
 pub fn test_data_set() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
         .is_test(true)
@@ -33,7 +31,6 @@ pub fn test_data_set() {
 }
 
 #[test]
-#[serial]
 pub fn test_data_get_nonexistent() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
         .is_test(true)

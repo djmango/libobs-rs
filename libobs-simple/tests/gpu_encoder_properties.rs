@@ -6,11 +6,9 @@ use libobs_wrapper::{
     encoders::{ObsContextEncoders, ObsVideoEncoderType},
     utils::StartupInfo,
 };
-use serial_test::serial;
 
 /// Integration test: Test accessing available video encoders
 #[test]
-#[serial]
 pub fn test_available_video_encoders() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
         .is_test(true)
@@ -32,7 +30,6 @@ pub fn test_available_video_encoders() {
 
 /// Integration test: Test creating and accessing encoder properties
 #[test]
-#[serial]
 pub fn test_encoder_properties_access() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
         .is_test(true)
@@ -57,7 +54,6 @@ pub fn test_encoder_properties_access() {
 
 /// Integration test: Test encoder type identification
 #[test]
-#[serial]
 pub fn test_encoder_type_identification() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
         .is_test(true)

@@ -4,12 +4,9 @@ use std::{
     ffi::{c_void, CStr, CString},
     ptr,
 };
-#[cfg(windows)]
-use serial_test::serial;
 
 #[test]
 #[cfg(windows)]
-#[serial]
 fn test_create_source() {
     // STARTUP
     unsafe {

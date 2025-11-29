@@ -31,7 +31,6 @@ include_win_bindings = ["generate_bindings"]
 
 [dev-dependencies]
 vsprintf = "2"
-serial_test = "3"
 
 [package.metadata.docs.rs]
 targets = ["x86_64-pc-windows-msvc"]

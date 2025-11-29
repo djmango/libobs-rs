@@ -4,11 +4,9 @@ use libobs_wrapper::{
     encoders::{ObsContextEncoders, ObsVideoEncoderType},
     utils::{AudioEncoderInfo, OutputInfo, StartupInfo},
 };
-use serial_test::serial;
 
 /// Stage 4: Initialize OBS with output, encoders, and create a scene
 #[test]
-#[serial]
 pub fn test_scene() {
     let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug"))
         .is_test(true)

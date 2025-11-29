@@ -6,12 +6,10 @@ use std::{path::PathBuf, time::Duration};
 
 use libobs_simple::sources::windows::{GameCaptureSourceBuilder, ObsGameCaptureMode};
 use libobs_wrapper::{sources::ObsSourceBuilder, utils::ObsPath};
-use serial_test::serial;
 
 use crate::common::{assert_not_black, initialize_obs};
 
 #[test]
-#[serial]
 #[ignore]
 pub fn record() {
     let rec_file = ObsPath::from_relative("game_capture.mp4");
