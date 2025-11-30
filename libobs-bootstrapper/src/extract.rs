@@ -161,7 +161,7 @@ async fn extract_dmg(
         // Create output directory
         if let Err(e) = tokio::fs::create_dir_all(&output_dir).await {
             let _ = Command::new("hdiutil").args(["detach"]).arg(&mount_point).output().await;
-            yield Err(e.into());
+            yield Err(ObsBootstrapError::IoError("Creating output directory", e));
             return;
         }
 
@@ -253,7 +253,10 @@ async fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), ObsBootstrapEr
         .map_err(|e| ObsBootstrapError::IoError("Executing ditto command", e))?;
 
     if !status.success() {
-        anyhow::bail!("ditto failed copying {:?} to {:?}", src, dst);
+        return Err(ObsBootstrapError::ExtractError(format!(
+            "ditto command failed with exit code: {}",
+            status.code().unwrap_or(-1)
+        )));
     }
 
     Ok(())

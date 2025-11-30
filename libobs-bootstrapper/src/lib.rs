@@ -276,9 +276,8 @@ pub(crate) async fn spawn_updater(
 async fn move_obs_files_macos() -> Result<(), ObsBootstrapError> {
     use tokio::fs;
 
-    let exe_path = env::current_exe()
-        .context("Failed to get exe path")
-        .map_err(|e| ObsBootstrapError::IoError("Getting current exe", e))?;
+    let exe_path =
+        env::current_exe().map_err(|e| ObsBootstrapError::IoError("Getting current exe", e))?;
     let exe_dir = exe_path.parent().ok_or_else(|| {
         ObsBootstrapError::IoError(
             "Getting exe parent directory",
