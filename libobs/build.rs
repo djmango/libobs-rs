@@ -50,7 +50,7 @@ fn main() {
             })
             .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")));
 
-       println!("cargo:rustc-link-search=native={}", target_dir.display());
+        println!("cargo:rustc-link-search=native={}", target_dir.display());
         println!(
             "cargo:rustc-link-search=native={}",
             target_dir.join("deps").display()
