@@ -297,13 +297,11 @@ async fn move_obs_files_macos() -> Result<(), ObsBootstrapError> {
     // Read all entries in obs_new
     let mut entries = fs::read_dir(&obs_new_dir)
         .await
-        .context("Failed to read obs_new directory")
         .map_err(|e| ObsBootstrapError::IoError("Reading obs_new directory", e))?;
 
     while let Some(entry) = entries
         .next_entry()
         .await
-        .context("Failed to read directory entry")
         .map_err(|e| ObsBootstrapError::IoError("Reading directory entry", e))?
     {
         let src_path = entry.path();
