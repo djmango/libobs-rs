@@ -11,7 +11,7 @@ authors = ["Hendrik Lind <hendrik@sshcrack.me>"]
 license = "GPL-3.0"
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
 specta = { optional = true, git = "https://github.com/specta-rs/specta", version = "=2.0.0-rc.20", features = [
     "serde",
     "interop",
@@ -42,7 +42,7 @@ serde = ["dep:serde"]
 specta = ["dep:specta"]
 
 [dev-dependencies]
-serde_json = "1.0"
+serde_json = "1"
 
 [package.metadata.docs.rs]
 targets = ["x86_64-pc-windows-msvc"]
