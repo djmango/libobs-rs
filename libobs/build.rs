@@ -79,17 +79,22 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/..");
         println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path/..");
     } else if target_os == "linux" {
-        // Linux: Use pkg-config to find libobs
-        let version = "30.0.0"; // Manually set for now, update when updating obs-studio version
-        pkg_config::Config::new()
+        // Linux: Try pkg-config first, fall back to just linking if OBS not found
+        // This allows CI builds without OBS installed
+        let version = "30.0.0";
+        match pkg_config::Config::new()
             .atleast_version(version)
             .probe("libobs")
-            .unwrap_or_else(|_| {
-                panic!(
-                    "Could not find libobs via pkg-config. Requires >= {}. See build guide.",
-                    version
-                )
-            });
+        {
+            Ok(_) => {
+                // OBS found via pkg-config, linking configured automatically
+            }
+            Err(_) => {
+                // OBS not found - emit link directive and let it fail at runtime if needed
+                println!("cargo:warning=libobs not found via pkg-config, using fallback linking");
+                println!("cargo:rustc-link-lib=dylib=obs");
+            }
+        }
     } else {
         // Fallback: assume dynamic libobs available via system linker path
         println!("cargo:rustc-link-lib=dylib=obs");
@@ -100,7 +105,23 @@ fn main() {
     let should_generate_bindings = feature_generate_bindings || target_family != "windows";
 
     if should_generate_bindings {
-        generate_bindings(&target_os);
+        // On Linux, use pre-generated bindings by default (avoids needing OBS headers)
+        if target_os == "linux" {
+            let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
+            let bindings_src = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
+                .join("src")
+                .join("bindings_linux.rs");
+            if bindings_src.exists() {
+                println!("cargo:warning=Using pre-generated Linux bindings");
+                std::fs::copy(&bindings_src, out_path.join("bindings.rs"))
+                    .expect("Failed to copy pre-generated bindings");
+            } else {
+                // Fall back to generating if pre-generated don't exist
+                generate_bindings(&target_os);
+            }
+        } else {
+            generate_bindings(&target_os);
+        }
     }
 }
 

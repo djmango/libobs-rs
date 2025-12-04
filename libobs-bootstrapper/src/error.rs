@@ -46,3 +46,9 @@ impl std::fmt::Display for ObsBootstrapError {
     }
 }
 impl std::error::Error for ObsBootstrapError {}
+
+impl From<std::io::Error> for ObsBootstrapError {
+    fn from(e: std::io::Error) -> Self {
+        ObsBootstrapError::IoError("IO error", e)
+    }
+}
