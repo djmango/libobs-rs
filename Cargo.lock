@@ -1270,9 +1270,9 @@ dependencies = [
 
 [[package]]
 name = "glib"
-version = "0.21.4"
+version = "0.21.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b9dbecb1c33e483a98be4acfea2ab369e1c28f517c6eadb674537409c25c4b2"
+checksum = "16de123c2e6c90ce3b573b7330de19be649080ec612033d397d72da265f1bd8b"
 dependencies = [
  "bitflags 2.10.0",
  "futures-channel",
@@ -1813,9 +1813,9 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "libc"
-version = "0.2.177"
+version = "0.2.178"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2874a2af47a2325c2001a6e6fad9b16a53b802102b528163885171cf92b15976"
+checksum = "37c93d8daa9d8a012fd8ab92f088405fb202ea0b6ab73ee2482ae66af4f42091"
 
 [[package]]
 name = "libloading"
@@ -1870,7 +1870,7 @@ dependencies = [
 
 [[package]]
 name = "libobs-simple"
-version = "5.0.6+32.0.2"
+version = "6.0.0+32.0.2"
 dependencies = [
  "anyhow",
  "display-info",
@@ -1900,7 +1900,7 @@ dependencies = [
 
 [[package]]
 name = "libobs-window-helper"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1910,7 +1910,7 @@ dependencies = [
 
 [[package]]
 name = "libobs-wrapper"
-version = "6.0.4+32.0.2"
+version = "7.0.0+32.0.2"
 dependencies = [
  "arboard",
  "chrono",
@@ -1960,7 +1960,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "libobs-simple",
- "libobs-wrapper",
 ]
 
 [[package]]
@@ -1998,9 +1997,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.28"
+version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34080505efa8e45a4b816c349525ebe327ceaa8559756f0356cba97ef3bf7432"
+checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "lzma-rust"
