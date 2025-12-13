@@ -57,12 +57,8 @@ pub fn download_binaries(
         } else {
             "apple" // macOS uses "Apple" for arm64 (Apple Silicon)
         };
-        // Use tar.xz for stripped builds (smaller), DMG for full builds with debug info
-        if strip_debug {
-            ("macos", ".tar.xz", "obs-prebuilt-macos.tar.xz", arch)
-        } else {
-            ("macos", ".dmg", "obs-prebuilt-macos.dmg", arch)
-        }
+        // macOS only provides DMG for main binaries (tar.xz is only for dSYMs)
+        ("macos", ".dmg", "obs-prebuilt-macos.dmg", arch)
     } else if target_os == "windows" {
         ("windows", ".zip", "obs-prebuilt-windows.zip", architecture)
     } else {
