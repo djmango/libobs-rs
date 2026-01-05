@@ -1,5 +1,7 @@
 // Example demonstrating useful flows using libobs-wrapper
 
+mod either_source;
+
 use std::{thread::sleep, time::Duration};
 
 use libobs_simple::{
@@ -20,6 +22,8 @@ use libobs_wrapper::{
     utils::{ObsPath, StartupInfo},
 };
 
+use crate::windows::either_source::either_source;
+
 pub fn main() -> anyhow::Result<()> {
     env_logger::init();
 
@@ -28,6 +32,8 @@ pub fn main() -> anyhow::Result<()> {
 
     // Create a new main scene
     let mut scene = context.scene("MAIN", Some(0))?;
+
+    either_source(context.clone(), scene.clone())?;
 
     // Add a output
     let mut output = context
