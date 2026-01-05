@@ -4,8 +4,8 @@
 use libobs_simple::sources::{
     ObsEitherSource, ObsObjectUpdater, ObsSourceBuilder,
     windows::{
-        GameCaptureSourceBuilder, ObsWindowCaptureMethod, WindowCaptureSourceBuilder,
-        WindowSearchMode,
+        GameCaptureSourceBuilder, ObsHookableSourceTrait, ObsWindowCaptureMethod,
+        WindowCaptureSourceBuilder, WindowSearchMode,
     },
 };
 use libobs_wrapper::{
@@ -57,6 +57,21 @@ pub fn either_source(context: ObsContext, mut scene: ObsSceneRef) -> anyhow::Res
                 .update()?;
         }
     }
+
+    // You an listen if for when a window has been hooked:
+    let _receiver = scene_item
+        .inner_source_mut()
+        .source_specific_signals()
+        .on_hooked()?;
+
+    // Wait for hooked event (in a real application you probably want to do this in a separate thread)
+    // receiver.recv()?;
+
+    // And we can also remove the scene item again.
+    // Note: This will only be removed if the last reference of the SceneItem is dropped
+    // If you are keeping references to this scene item like in a thread, you'll need to make sure
+    // that these references get dropped as well.
+    scene.remove_scene_item(scene_item)?;
 
     Ok(())
 }
