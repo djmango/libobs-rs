@@ -1835,7 +1835,7 @@ dependencies = [
 
 [[package]]
 name = "libobs-simple"
-version = "7.0.0+32.0.2"
+version = "8.0.0+32.0.2"
 dependencies = [
  "anyhow",
  "display-info",
@@ -1877,7 +1877,7 @@ dependencies = [
 
 [[package]]
 name = "libobs-wrapper"
-version = "8.0.0+32.0.2"
+version = "9.0.0+32.0.2"
 dependencies = [
  "arboard",
  "chrono",
