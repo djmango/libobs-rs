@@ -12,7 +12,9 @@ macro_rules! impl_signal_manager {
             $($crate::__signals_impl_signal!($ptr, $signal_name, $($inner_def)*);)*
 
             $(
-            extern "C" fn [< $signal_name:snake _handler>](obj_ptr: *mut std::ffi::c_void, __internal_calldata: *mut libobs::calldata_t) {
+            extern "C" fn [< $signal_name:snake _handler>](obj_ptr_key: *mut std::ffi::c_void, __internal_calldata: *mut libobs::calldata_t) {
+                let obj_ptr_key = obj_ptr_key as usize;
+
                 #[allow(unused_unsafe)]
                 let res = unsafe {
                     // Safety: We are in the runtime and the calldata pointer is valid because OBS is calling this function
@@ -31,7 +33,7 @@ macro_rules! impl_signal_manager {
                 }
 
                 let senders = senders.unwrap();
-                let senders = senders.get(&$crate::unsafe_send::SendableComp(obj_ptr as $ptr));
+                let senders = senders.get(&obj_ptr_key);
                 if senders.is_none() {
                     log::warn!("No sender found for signal {}", stringify!($signal_name));
                     return;
@@ -49,14 +51,14 @@ macro_rules! impl_signal_manager {
             }
 
             impl $name {
-                fn smart_ptr_to_key(ptr: &$crate::unsafe_send::SmartPointerSendable<$ptr>) -> $crate::unsafe_send::SendableComp<$ptr> {
-                    $crate::unsafe_send::SendableComp(ptr.get_ptr())
+                fn smart_ptr_to_key(ptr: &$crate::unsafe_send::SmartPointerSendable<$ptr>) -> usize {
+                    ptr.get_ptr() as usize
                 }
 
                 pub(crate) fn new(smart_ptr: &$crate::unsafe_send::SmartPointerSendable<$ptr>, runtime: $crate::runtime::ObsRuntime) -> Result<Self, $crate::utils::ObsError> {
                     use $crate::utils::ObsString;
                     let smart_ptr = smart_ptr.clone();
-                    let raw_ptr = Self::smart_ptr_to_key(&smart_ptr);
+                    let smart_ptr_as_key = Self::smart_ptr_to_key(&smart_ptr);
 
                     $(
                         let senders = [<$signal_name:snake:upper _SENDERS>].clone();
@@ -68,10 +70,10 @@ macro_rules! impl_signal_manager {
                         let (tx, [<_ $signal_name:snake _rx>]) = tokio::sync::broadcast::channel(16);
                         let mut senders = senders.unwrap();
                         // Its fine since we are just using the pointer as key
-                        senders.insert(raw_ptr.clone(), tx);
+                        senders.insert(smart_ptr_as_key.clone(), tx);
                     )*
 
-                    $crate::run_with_obs!(runtime, (raw_ptr, smart_ptr), move || {
+                    $crate::run_with_obs!(runtime, (smart_ptr_as_key, smart_ptr), move || {
                             let handler = ($handler_getter)(smart_ptr);
                             $(
                                 let signal = ObsString::new($signal_name);
@@ -81,7 +83,8 @@ macro_rules! impl_signal_manager {
                                         handler,
                                         signal.as_ptr().0,
                                         Some([< $signal_name:snake _handler>]),
-                                        raw_ptr.0 as *mut std::ffi::c_void,
+                                        // We are just casting it back to a usize in the handler function
+                                        smart_ptr_as_key as *mut std::ffi::c_void,
                                     );
                                 };
                             )*

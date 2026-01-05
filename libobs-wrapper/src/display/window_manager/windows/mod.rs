@@ -5,7 +5,7 @@ use std::sync::{
     Arc, Mutex,
 };
 
-use crate::unsafe_send::Sendable;
+use crate::unsafe_send::AlwaysSendable;
 use crate::utils::ObsError;
 use crate::{display::ObsWindowHandle, unsafe_send::SmartPointerSendable};
 use lazy_static::lazy_static;
@@ -161,11 +161,11 @@ impl WindowsPreviewChildWindowHandler {
         let tmp = should_exit.clone();
 
         let parent = parent.get_hwnd();
-        let parent = Mutex::new(Sendable(parent));
+        let parent = Mutex::new(AlwaysSendable(parent));
         let message_thread = std::thread::spawn(move || {
             let parent = parent.lock().unwrap().0;
             // We have to have the whole window creation stuff here as well so the message loop functions
-            let create = move || -> Result<Sendable<HWND>, ObsError> {
+            let create = move || -> Result<AlwaysSendable<HWND>, ObsError> {
                 log::trace!("Registering class...");
                 try_register_class().map_err(|e| ObsError::DisplayCreationError(e.to_string()))?;
                 let enabled = unsafe {
@@ -261,7 +261,7 @@ impl WindowsPreviewChildWindowHandler {
                     SetWindowLongPtrW(window, GWL_EXSTYLE, ex_style);
                 }
 
-                Ok(Sendable(window))
+                Ok(AlwaysSendable(window))
             };
 
             let r = create();

@@ -17,9 +17,6 @@
     ],
     //"rust-analyzer.check.command": "clippy",
     "rust-analyzer.cargo.features": [],
-    "rust-analyzer.cargo.noDefaultFeatures": true,
-    "nixEnvSelector.nixFile": "${workspaceFolder}/flake.nix",
-    "nixEnvSelector.useFlakes": true,
     "cSpell.words": [
         "libobs",
         "pipewire",

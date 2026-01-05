@@ -89,7 +89,7 @@ macro_rules! __signals_impl_primitive_handler {
                 ));
             }
 
-            Result::<_, $crate::utils::ObsError>::Ok($crate::unsafe_send::Sendable($field_name))
+            Result::<_, $crate::utils::ObsError>::Ok($crate::unsafe_send::AlwaysSendable($field_name))
         }
     };
     (__enum $field_name: ident, $enum_type: ty) => {
@@ -114,7 +114,7 @@ macro_rules! __signals_impl_signal {
         paste::paste! {
             type [<__Private $signal_name:camel Type >] = $gen_type;
             lazy_static::lazy_static! {
-                static ref [<$signal_name:snake:upper _SENDERS>]: std::sync::Arc<std::sync::RwLock<std::collections::HashMap<$crate::unsafe_send::SendableComp<$ptr>, tokio::sync::broadcast::Sender<$gen_type>>>> = std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
+                static ref [<$signal_name:snake:upper _SENDERS>]: std::sync::Arc<std::sync::RwLock<std::collections::HashMap<usize, tokio::sync::broadcast::Sender<$gen_type>>>> = std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
             }
 
             #[allow(unknown_lints)]
@@ -133,7 +133,7 @@ macro_rules! __signals_impl_signal {
         paste::paste! {
             type [<__Private $signal_name:camel Type >] = ();
             lazy_static::lazy_static! {
-                static ref [<$signal_name:snake:upper _SENDERS>]: std::sync::Arc<std::sync::RwLock<std::collections::HashMap<$crate::unsafe_send::SendableComp<$ptr>, tokio::sync::broadcast::Sender<()>>>> = std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
+                static ref [<$signal_name:snake:upper _SENDERS>]: std::sync::Arc<std::sync::RwLock<std::collections::HashMap<usize, tokio::sync::broadcast::Sender<()>>>> = std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
             }
 
             /// # Safety
@@ -168,13 +168,13 @@ macro_rules! __signals_impl_signal {
         paste::paste! {
             type [<__Private $signal_name:camel Type >] = $name;
             lazy_static::lazy_static! {
-                static ref [<$signal_name:snake:upper _SENDERS>]: std::sync::Arc<std::sync::RwLock<std::collections::HashMap<$crate::unsafe_send::SendableComp<$ptr>, tokio::sync::broadcast::Sender<$name>>>> = std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
+                static ref [<$signal_name:snake:upper _SENDERS>]: std::sync::Arc<std::sync::RwLock<std::collections::HashMap<usize, tokio::sync::broadcast::Sender<$name>>>> = std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
             }
 
             #[derive(Debug, Clone)]
             pub struct $name {
                 $(pub $field_name: $field_type,)*
-                $(pub $ptr_field_name: $crate::unsafe_send::Sendable<$ptr_field_type>,)*
+                $(pub $ptr_field_name: $crate::unsafe_send::AlwaysSendable<$ptr_field_type>,)*
             }
 
             #[allow(unknown_lints)]

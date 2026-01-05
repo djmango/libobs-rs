@@ -10,13 +10,23 @@ use crate::utils::ObsDropGuard;
 #[derive(Debug, Clone)]
 pub struct Sendable<T>(pub T);
 
+#[cfg(feature = "enable_runtime")]
 unsafe impl<T> Send for Sendable<T> {}
+#[cfg(feature = "enable_runtime")]
 unsafe impl<T> Sync for Sendable<T> {}
+
+#[derive(Debug, Clone)]
+pub struct AlwaysSendable<T>(pub T);
+
+unsafe impl<T> Send for AlwaysSendable<T> {}
+unsafe impl<T> Sync for AlwaysSendable<T> {}
 
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub struct SendableComp<T>(pub T);
 
+#[cfg(feature = "enable_runtime")]
 unsafe impl<T: PartialEq> Send for SendableComp<T> {}
+#[cfg(feature = "enable_runtime")]
 unsafe impl<T: PartialEq> Sync for SendableComp<T> {}
 
 #[derive(Debug, Clone)]
@@ -46,7 +56,9 @@ impl<T: Clone> SmartPointerSendable<T> {
     }
 }
 
+#[cfg(feature = "enable_runtime")]
 unsafe impl<T: Clone> Send for SmartPointerSendable<T> {}
+#[cfg(feature = "enable_runtime")]
 unsafe impl<T: Clone> Sync for SmartPointerSendable<T> {}
 
 #[derive(Debug, Clone)]
@@ -88,5 +100,7 @@ impl<T: Clone> SmartPointerSendableComp<T> {
     }
 }
 
+#[cfg(feature = "enable_runtime")]
 unsafe impl<T: Clone> Send for SmartPointerSendableComp<T> {}
+#[cfg(feature = "enable_runtime")]
 unsafe impl<T: Clone> Sync for SmartPointerSendableComp<T> {}
