@@ -12,3 +12,7 @@ test-group = 'actual-source-capture'
 # Do not cancel the test run on the first failure.
 fail-fast = false
 default-filter = "not binary(/^gpu_/)"
+
+[profile.integrated-graphics]
+# Do not cancel the test run on the first failure.
+default-filter = "not binary(/^gpu_encoder_test_switch/)"
