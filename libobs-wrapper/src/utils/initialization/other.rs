@@ -1,6 +1,8 @@
 use std::ptr;
 
 #[cfg(target_os = "linux")]
+use super::PlatformType;
+#[cfg(target_os = "linux")]
 use std::rc::Rc;
 
 use crate::unsafe_send::Sendable;
@@ -163,14 +165,6 @@ pub(crate) unsafe fn platform_specific_setup(
         }
         PlatformType::Invalid => unreachable!(),
     }
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Clone, Debug)]
-pub enum PlatformType {
-    X11,
-    Wayland,
-    Invalid,
 }
 
 #[cfg(target_os = "linux")]

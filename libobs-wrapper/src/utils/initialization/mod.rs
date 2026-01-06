@@ -8,11 +8,17 @@ pub(crate) use windows::*;
 mod other;
 
 #[cfg(not(windows))]
-pub use other::PlatformType;
-#[cfg(not(windows))]
 pub(crate) use other::*;
 
 use crate::unsafe_send::Sendable;
+
+#[cfg(any(target_os = "linux", doc, feature = "__test_environment"))]
+#[derive(Clone, Debug)]
+pub enum PlatformType {
+    X11,
+    Wayland,
+    Invalid,
+}
 
 #[derive(Debug, Clone)]
 pub enum NixDisplay {
