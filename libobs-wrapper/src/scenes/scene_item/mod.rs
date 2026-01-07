@@ -31,7 +31,7 @@ impl_obs_drop!(_ObsSceneItemDropGuard, (scene_item), move || unsafe {
     // Safety: The pointer is valid as long as we are in the runtime and the guard is alive.
     // Because scene item is attached to a scene, we first remove it from the scene and then release it.
     libobs::obs_sceneitem_remove(scene_item.0);
-    libobs::obs_sceneitem_release(scene_item.0);
+    // Release is called under the hood
 });
 
 #[derive(Debug, Clone)]
@@ -39,9 +39,14 @@ impl_obs_drop!(_ObsSceneItemDropGuard, (scene_item), move || unsafe {
 /// If this struct is attached to the scene, it'll not be dropped as the scene
 /// internally stores this struct, thus the source will also not be dropped.
 pub struct ObsSceneItemRef<T: ObsSourceTrait + Clone> {
-    underlying_source: T,
+    // Drop the scene item first...
     scene_item_ptr: SmartPointerSendable<*mut obs_scene_item>,
     runtime: ObsRuntime,
+    // Then the scene
+    _scene_ptr: SmartPointerSendable<*mut libobs::obs_scene>,
+
+    // And at last the source
+    underlying_source: T,
 }
 
 impl<T: ObsSourceTrait + Clone> ObsSceneItemRef<T> {
@@ -75,6 +80,7 @@ impl<T: ObsSourceTrait + Clone> ObsSceneItemRef<T> {
 
         Ok(Self {
             underlying_source: source,
+            _scene_ptr: scene.as_ptr().clone(),
             scene_item_ptr,
             runtime,
         })
