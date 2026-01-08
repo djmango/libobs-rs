@@ -186,12 +186,16 @@ pub fn install() -> anyhow::Result<()> {
 pub fn build_obs_binaries(config: ObsBuildConfig) -> anyhow::Result<()> {
     //TODO For build scripts, we should actually check the TARGET env var instead of just erroring out on linux, but I don't think anyone will be cross-compiling
 
-    /*
-    if cfg!(target_os = "linux") {
+    // Check if we are targeting Linux (not host Linux, but target Linux)
+    // We allow running on Linux if targeting Windows/macOS (cross-compilation)
+    let target_os = std::env::var("OBS_BUILD_TARGET_OS")
+        .or_else(|_| std::env::var("CARGO_CFG_TARGET_OS"))
+        .unwrap_or_else(|_| std::env::consts::OS.to_string());
+
+    if target_os == "linux" {
         // The case for the "install" subcommand is handled before calling this function
         return Err(anyhow::anyhow!("Building OBS Studio from source is required on Linux. You can install binaries by running `cargo-obs-build install` separately before building your project."));
     }
-    */
 
     let ObsBuildConfig {
         mut cache_dir,
