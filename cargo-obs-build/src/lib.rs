@@ -186,10 +186,12 @@ pub fn install() -> anyhow::Result<()> {
 pub fn build_obs_binaries(config: ObsBuildConfig) -> anyhow::Result<()> {
     //TODO For build scripts, we should actually check the TARGET env var instead of just erroring out on linux, but I don't think anyone will be cross-compiling
 
+    /*
     if cfg!(target_os = "linux") {
         // The case for the "install" subcommand is handled before calling this function
         return Err(anyhow::anyhow!("Building OBS Studio from source is required on Linux. You can install binaries by running `cargo-obs-build install` separately before building your project."));
     }
+    */
 
     let ObsBuildConfig {
         mut cache_dir,
