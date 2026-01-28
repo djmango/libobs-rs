@@ -1,14 +1,9 @@
-use std::sync::Arc;
-
-use libobs::obs_data;
-
 use crate::{
     run_with_obs,
-    unsafe_send::Sendable,
+    runtime::ObsRuntime,
+    unsafe_send::SmartPointerSendable,
     utils::{ObsError, ObsString},
 };
-
-use super::_ObsDataDropGuard;
 
 #[derive(Debug)]
 pub enum ObsDataChange {
@@ -19,16 +14,32 @@ pub enum ObsDataChange {
 }
 
 #[derive(Debug)]
-/// Important: Make sure to call `update()` after setting the values.
+/// This struct is used to update the ObsData in bulk, rather than having to call the set_string
+/// methods all the time.
+/// This reduces the load to the runtime, as only one closure has to run on the OBS runtime once,
+/// rather than multiple operations requiring multiple closures to be run on the OBs runtime.
+/// Important: Make sure to call `apply()` after setting the values.
+///
 /// This will apply the changes to the `ObsData` object.
-#[must_use = "The `update()` method must be called to apply changes."]
+#[must_use = "The `apply()` method must be called to apply changes."]
 pub struct ObsDataUpdater {
-    pub(crate) changes: Vec<ObsDataChange>,
-    pub(crate) obs_data: Sendable<*mut obs_data>,
-    pub(crate) _drop_guard: Arc<_ObsDataDropGuard>,
+    changes: Vec<ObsDataChange>,
+    runtime: ObsRuntime,
+    data_ptr: SmartPointerSendable<*mut libobs::obs_data_t>,
 }
 
 impl ObsDataUpdater {
+    pub(super) fn new(
+        data_ptr: SmartPointerSendable<*mut libobs::obs_data_t>,
+        runtime: ObsRuntime,
+    ) -> Self {
+        ObsDataUpdater {
+            changes: Vec::new(),
+            data_ptr,
+            runtime,
+        }
+    }
+
     pub fn set_string_ref(&mut self, key: impl Into<ObsString>, value: impl Into<ObsString>) {
         let key = key.into();
         let value = value.into();
@@ -62,31 +73,40 @@ impl ObsDataUpdater {
         self
     }
 
-    pub fn update(self) -> Result<(), ObsError> {
+    pub fn apply(self) -> Result<(), ObsError> {
         let ObsDataUpdater {
             changes,
-            obs_data,
-            _drop_guard,
+            data_ptr,
+            runtime,
         } = self;
 
-        let obs_data = obs_data.clone();
-        run_with_obs!(_drop_guard.runtime, (obs_data), move || unsafe {
+        let data_ptr = data_ptr.clone();
+        run_with_obs!(runtime, (data_ptr), move || unsafe {
+            // Safety: All pointers are held within the changes type and data_ptr is valid because we are using a SmartPointer.
+
             for change in changes {
                 match change {
-                    ObsDataChange::String(key, value) => {
-                        libobs::obs_data_set_string(obs_data, key.as_ptr().0, value.as_ptr().0)
-                    }
+                    ObsDataChange::String(key, value) => libobs::obs_data_set_string(
+                        data_ptr.get_ptr(),
+                        key.as_ptr().0,
+                        value.as_ptr().0,
+                    ),
                     ObsDataChange::Int(key, value) => {
-                        libobs::obs_data_set_int(obs_data, key.as_ptr().0, value)
+                        libobs::obs_data_set_int(data_ptr.get_ptr(), key.as_ptr().0, value)
                     }
                     ObsDataChange::Bool(key, value) => {
-                        libobs::obs_data_set_bool(obs_data, key.as_ptr().0, value)
+                        libobs::obs_data_set_bool(data_ptr.get_ptr(), key.as_ptr().0, value)
                     }
                     ObsDataChange::Double(key, value) => {
-                        libobs::obs_data_set_double(obs_data, key.as_ptr().0, value)
+                        libobs::obs_data_set_double(data_ptr.get_ptr(), key.as_ptr().0, value)
                     }
                 };
             }
         })
+    }
+
+    #[deprecated = "Use `apply()` instead."]
+    pub fn update(self) -> Result<(), ObsError> {
+        self.apply()
     }
 }

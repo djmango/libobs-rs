@@ -4,8 +4,11 @@ mod common;
 
 use std::{path::PathBuf, process::Command, time::Duration};
 
-use libobs_simple::sources::windows::{ObsWindowCaptureMethod, WindowCaptureSourceBuilder};
-use libobs_wrapper::{sources::ObsSourceBuilder, utils::ObsPath};
+use libobs_simple::{
+    output::replay::ObsContextReplayExt,
+    sources::windows::{ObsWindowCaptureMethod, WindowCaptureSourceBuilder},
+};
+use libobs_wrapper::{data::output::ObsOutputTrait, sources::ObsSourceBuilder, utils::ObsPath};
 
 use common::{assert_not_black, find_notepad, initialize_obs};
 
@@ -29,8 +32,13 @@ pub fn test_recording() {
     println!("Recording {:?}", window.0.obs_id);
 
     let (mut context, mut output) = initialize_obs(rec_file);
-    let mut scene = context.scene("main").unwrap();
-    scene.set_to_channel(0).unwrap();
+
+    let mut replay_buffer = context
+        .replay_buffer_builder("replay_output", ObsPath::from_relative("."))
+        .build()
+        .unwrap();
+
+    let mut scene = context.scene("main", Some(0)).unwrap();
 
     let source_name = "test_capture";
     context
@@ -43,13 +51,16 @@ pub fn test_recording() {
 
     // Start recording
     output.start().unwrap();
+    replay_buffer.start().unwrap();
     println!("Recording started");
 
     // Record for 3 seconds
     std::thread::sleep(Duration::from_secs(3));
+    replay_buffer.save_buffer().unwrap();
 
     println!("Recording stop");
     output.stop().unwrap();
+    replay_buffer.stop().unwrap();
 
     // Clean up notepad process if we started it
     cmd.take()

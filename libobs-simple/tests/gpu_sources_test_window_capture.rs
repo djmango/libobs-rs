@@ -11,15 +11,10 @@ use std::{
 };
 
 use crate::common::{assert_not_black, find_notepad, initialize_obs};
-use libobs_simple::sources::windows::{
-    ObsWindowCaptureMethod, WindowCaptureSourceBuilder, WindowCaptureSourceUpdater,
-};
+use libobs_simple::sources::windows::{ObsWindowCaptureMethod, WindowCaptureSourceBuilder};
 use libobs_window_helper::WindowSearchMode;
-use libobs_wrapper::data::ObsObjectUpdater;
-use libobs_wrapper::{
-    sources::ObsSourceBuilder,
-    utils::{traits::ObsUpdatable, ObsPath},
-};
+use libobs_wrapper::data::{output::ObsOutputTrait, ObsObjectUpdater};
+use libobs_wrapper::{sources::ObsSourceBuilder, utils::ObsPath};
 
 #[test]
 // For this test to work, notepad must be open
@@ -41,11 +36,10 @@ pub fn record() {
     println!("Recording {:?}", window.0.obs_id);
 
     let (mut context, mut output) = initialize_obs(rec_file);
-    let mut scene = context.scene("main").unwrap();
-    scene.set_to_channel(0).unwrap();
+    let mut scene = context.scene("main", Some(0)).unwrap();
 
     let source_name = "test_capture";
-    let mut source = context
+    let mut scene_item = context
         .source_builder::<WindowCaptureSourceBuilder, _>(source_name)
         .unwrap()
         .set_capture_method(ObsWindowCaptureMethod::MethodAuto)
@@ -68,8 +62,9 @@ pub fn record() {
         let w = windows.get(i).unwrap();
         println!("Setting to {:?}", w.0.obs_id);
 
-        source
-            .create_updater::<WindowCaptureSourceUpdater>()
+        scene_item
+            .inner_source_mut()
+            .create_updater()
             .unwrap()
             .set_window(w)
             .update()

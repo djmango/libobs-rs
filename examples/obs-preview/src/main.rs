@@ -5,28 +5,33 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 #[cfg(target_os = "linux")]
-use libobs_simple::sources::linux::LinuxGeneralScreenCapture;
+use libobs_simple::sources::linux::{
+    LinuxGeneralScreenCaptureBuilder, LinuxGeneralScreenCaptureSourceRef,
+};
+#[cfg(windows)]
+use libobs_simple::sources::windows::monitor_capture::MonitorCaptureSource;
+#[cfg(target_os = "linux")]
+use libobs_wrapper::scenes::ObsSceneItemRef;
+#[cfg(windows)]
+use libobs_wrapper::scenes::ObsSceneItemRef;
+use libobs_wrapper::scenes::SceneItemTrait;
 #[cfg(target_os = "linux")]
 use libobs_wrapper::utils::NixDisplay;
 
 #[cfg(windows)]
-use libobs_wrapper::utils::traits::ObsUpdatable;
-
+use libobs_simple::sources::ObsObjectUpdater;
 #[cfg(windows)]
 use libobs_simple::sources::windows::{
-    GameCaptureSourceBuilder, MonitorCaptureSourceBuilder, MonitorCaptureSourceUpdater,
+    GameCaptureSourceBuilder, MonitorCaptureSourceBuilder, ObsDisplayCaptureMethod,
     ObsGameCaptureMode, WindowSearchMode,
 };
-#[cfg(windows)]
-use libobs_simple::sources::ObsObjectUpdater;
 use libobs_wrapper::data::video::ObsVideoInfoBuilder;
 use libobs_wrapper::display::{
     ObsDisplayCreationData, ObsDisplayRef, ObsWindowHandle, ShowHideTrait, WindowPositionTrait,
 };
-#[cfg(windows)]
 use libobs_wrapper::sources::ObsSourceBuilder;
 #[cfg(any(windows, target_os = "linux"))]
-use libobs_wrapper::sources::ObsSourceRef;
+use libobs_wrapper::sources::ObsSourceTrait;
 use libobs_wrapper::unsafe_send::Sendable;
 use libobs_wrapper::{context::ObsContext, utils::StartupInfo};
 use winit::application::ApplicationHandler;
@@ -47,24 +52,21 @@ impl Drop for SignalThreadGuard {
     fn drop(&mut self) {
         self.should_exit.store(true, Ordering::Relaxed);
         if let Some(handle) = self.handle.take() {
-            handle.join().unwrap();
+            let res = handle.join();
+            if let Err(e) = res {
+                eprintln!("Couldn't join signal thread {e:?}");
+            }
         }
     }
 }
 
-#[cfg(any(windows, target_os = "linux"))]
 struct ObsInner {
     context: ObsContext,
     display: ObsDisplayRef,
-    #[cfg_attr(not(windows), allow(dead_code))]
-    source: ObsSourceRef,
-    _guard: SignalThreadGuard,
-}
-
-#[cfg(target_os = "macos")]
-struct ObsInner {
-    context: ObsContext,
-    display: ObsDisplayRef,
+    #[cfg(windows)]
+    _scene_item: ObsSceneItemRef<MonitorCaptureSource>,
+    #[cfg(target_os = "linux")]
+    _scene_item: ObsSceneItemRef<LinuxGeneralScreenCaptureSourceRef>,
     _guard: SignalThreadGuard,
 }
 
@@ -86,6 +88,7 @@ impl ObsInner {
         #[cfg(target_os = "linux")]
         if let RawDisplayHandle::Wayland(handle) = _event_loop.display_handle().unwrap().as_raw() {
             info = unsafe {
+                // Safety: We know that the display handle is valid as long as the event loop is running.
                 info.set_nix_display(NixDisplay::Wayland(Sendable(handle.display.as_ptr() as _)))
             };
         }
@@ -96,7 +99,7 @@ impl ObsInner {
         //let _output = context.simple_output_builder("recording.mp4")
         //    .build()?;
 
-        let mut scene = context.scene("Main Scene")?;
+        let mut scene = context.scene("Main Scene", Some(0))?;
 
         #[cfg(windows)]
         let apex = GameCaptureSourceBuilder::get_windows(WindowSearchMode::ExcludeMinimized)?;
@@ -106,8 +109,10 @@ impl ObsInner {
             .find(|e| e.title.is_some() && e.title.as_ref().unwrap().contains("Apex"));
 
         #[cfg(windows)]
-        let monitor_src = context
+        let monitor_item = context
             .source_builder::<MonitorCaptureSourceBuilder, _>("Monitor capture")?
+            // You can also set a capture method if you want to
+            .set_capture_method(ObsDisplayCaptureMethod::MethodDXGI)
             .set_monitor(
                 &MonitorCaptureSourceBuilder::get_monitors().expect("Couldn't get monitors")[0],
             )
@@ -115,37 +120,28 @@ impl ObsInner {
 
         // You could also read a restore token here frm a file
         #[cfg(target_os = "linux")]
-        let monitor_src = LinuxGeneralScreenCapture::auto_detect(
-            context.runtime().clone(),
-            "Monitor capture",
-            None,
-        )
-        .unwrap()
-        .add_to_scene(&mut scene)?;
+        let monitor_item = context
+            .source_builder::<LinuxGeneralScreenCaptureBuilder, _>("Monitor capture")?
+            .add_to_scene(&mut scene)?;
 
-        scene.fit_source_to_screen(&monitor_src)?;
+        monitor_item.fit_source_to_screen()?;
 
-        #[cfg(windows)]
-        let mut _apex_source = None;
         #[cfg(windows)]
         if let Some(apex) = apex {
             println!(
                 "Is used by other instance: {}",
                 GameCaptureSourceBuilder::is_window_in_use_by_other_instance(apex.pid)?
             );
-            let source = context
+            let game_capture_item = context
                 .source_builder::<GameCaptureSourceBuilder, _>("Game capture")?
                 .set_capture_mode(ObsGameCaptureMode::CaptureSpecificWindow)
                 .set_window(apex)
                 .add_to_scene(&mut scene)?;
 
-            scene.fit_source_to_screen(&source)?;
-            _apex_source = Some(source);
+            game_capture_item.fit_source_to_screen()?;
         } else {
             println!("No Apex window found for game capture");
         }
-
-        scene.set_to_channel(0)?;
 
         let hwnd = window.window_handle().unwrap().as_raw();
 
@@ -179,11 +175,11 @@ impl ObsInner {
             ObsDisplayCreationData::new(obs_handle, 0, 0, width, height);
 
         // Example for signals and events with libobs
-        let tmp = monitor_src.clone();
+        let tmp = monitor_item.inner_source().clone();
         let should_exit = Arc::new(AtomicBool::new(false));
         let thread_exit = should_exit.clone();
         let handle = std::thread::spawn(move || {
-            let signal_manager = tmp.signal_manager();
+            let signal_manager = tmp.signals();
             let mut x = signal_manager.on_update().unwrap();
 
             println!("Listening for updates");
@@ -196,13 +192,15 @@ impl ObsInner {
             }
         });
 
-        #[allow(unused_unsafe)]
-        let display = unsafe { context.display(data)? };
+        #[cfg_attr(not(target_os = "linux"), allow(unused_unsafe))]
+        let display = unsafe {
+            // Safety: All references are dropped of the display before the display is dropped.
+            context.display(data)?
+        };
         Ok(Self {
             context,
-            #[cfg_attr(not(target_os = "linux"), allow(unused_unsafe))]
             display,
-            source: monitor_src,
+            _scene_item: monitor_item,
             _guard: SignalThreadGuard {
                 should_exit,
                 handle: Some(handle),
@@ -340,7 +338,7 @@ impl ApplicationHandler for App {
                         if let Some(inner) = inner {
                             let monitor_index = self.monitor_index.clone();
 
-                            let source = &mut inner.source;
+                            let scene_item = &mut inner._scene_item;
                             let monitors = MonitorCaptureSourceBuilder::get_monitors().unwrap();
 
                             let monitor_index = monitor_index
@@ -348,8 +346,9 @@ impl ApplicationHandler for App {
                                 % monitors.len();
                             let monitor = &monitors[monitor_index];
 
-                            source
-                                .create_updater::<MonitorCaptureSourceUpdater>()
+                            scene_item
+                                .inner_source_mut()
+                                .create_updater()
                                 .unwrap()
                                 .set_monitor(monitor)
                                 .update()

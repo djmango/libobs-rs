@@ -5,15 +5,16 @@ use duplicate::duplicate_item;
 use crate::{
     context::ObsContext,
     data::{
-        output::ObsOutputRef,
+        output::{ObsOutputRef, ObsOutputTrait},
         properties::{
-            get_properties_inner, ObsProperty, ObsPropertyObject, ObsPropertyObjectPrivate,
+            ObsProperty, ObsPropertyObject, ObsPropertyObjectPrivate, _ObsPropertiesDropGuard,
+            property_ptr_to_struct,
         },
         ObsData,
     },
     run_with_obs,
     runtime::ObsRuntime,
-    unsafe_send::Sendable,
+    unsafe_send::{Sendable, SmartPointerSendable},
     utils::{ObjectInfo, ObsError, ObsString},
 };
 
@@ -86,7 +87,7 @@ impl StructName {
 impl ObsAudioEncoderBuilder {
     pub fn apply_to_context(
         self,
-        output: &mut ObsOutputRef,
+        output: &mut dyn ObsOutputTrait,
         name: &str,
         settings: Option<ObsData>,
         hotkey_data: Option<ObsData>,
@@ -120,7 +121,7 @@ impl ObsVideoEncoderBuilder {
 impl ObsPropertyObject for StructName {
     fn get_properties(&self) -> Result<HashMap<String, ObsProperty>, ObsError> {
         let properties_raw = self.get_properties_raw()?;
-        get_properties_inner(properties_raw, self.runtime.clone())
+        property_ptr_to_struct(properties_raw, self.runtime.clone())
     }
 }
 
@@ -130,23 +131,56 @@ impl ObsPropertyObject for StructName {
     [ObsVideoEncoderBuilder]
 )]
 impl ObsPropertyObjectPrivate for StructName {
-    fn get_properties_raw(&self) -> Result<Sendable<*mut libobs::obs_properties_t>, ObsError> {
+    fn get_properties_raw(
+        &self,
+    ) -> Result<SmartPointerSendable<*mut libobs::obs_properties_t>, ObsError> {
         let encoder_name: ObsString = self.encoder_id.clone().into();
-        let encoder_name_ptr = encoder_name.as_ptr();
 
-        run_with_obs!(self.runtime, (encoder_name_ptr), move || unsafe {
-            Sendable(libobs::obs_get_encoder_properties(encoder_name_ptr))
-        })
+        let property_ptr = run_with_obs!(self.runtime, (encoder_name), move || {
+            let encoder_name_ptr = encoder_name.as_ptr().0;
+
+            let property_ptr = unsafe {
+                // Safety: encoder_name_ptr is valid because it comes from ObsString
+                libobs::obs_get_encoder_properties(encoder_name_ptr)
+            };
+
+            if property_ptr.is_null() {
+                Err(ObsError::NullPointer(None))
+            } else {
+                Ok(Sendable(property_ptr))
+            }
+        })??;
+
+        let drop_guard = Arc::new(_ObsPropertiesDropGuard::new(
+            property_ptr.clone(),
+            self.runtime.clone(),
+        ));
+
+        Ok(SmartPointerSendable::new(property_ptr.0, drop_guard))
     }
 
     fn get_properties_by_id_raw<T: Into<ObsString> + Sync + Send>(
         id: T,
         runtime: ObsRuntime,
-    ) -> Result<Sendable<*mut libobs::obs_properties_t>, ObsError> {
+    ) -> Result<SmartPointerSendable<*mut libobs::obs_properties_t>, ObsError> {
         let id: ObsString = id.into();
-        let id_ptr = id.as_ptr();
-        run_with_obs!(runtime, (id_ptr), move || unsafe {
-            Sendable(libobs::obs_get_encoder_properties(id_ptr))
-        })
+        let ptr = run_with_obs!(runtime, (id), move || {
+            let id_ptr = id.as_ptr();
+
+            let property_ptr = unsafe {
+                // Safety: id_ptr is valid because it comes from ObsString
+                libobs::obs_get_encoder_properties(id_ptr.0)
+            };
+
+            if property_ptr.is_null() {
+                Err(ObsError::NullPointer(None))
+            } else {
+                Ok(Sendable(property_ptr))
+            }
+        })??;
+
+        let drop_guard = Arc::new(_ObsPropertiesDropGuard::new(ptr.clone(), runtime.clone()));
+
+        Ok(SmartPointerSendable::new(ptr.0, drop_guard))
     }
 }

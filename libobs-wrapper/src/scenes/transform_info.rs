@@ -3,11 +3,10 @@ use std::fmt::Debug;
 use libobs::obs_transform_info;
 
 use crate::{
-    enums::{ObsBoundsType, OsEnumType},
+    enums::{ObsAlignment, ObsBoundsType, OsEnumType},
     graphics::Vec2,
     macros::enum_from_number,
-    scenes::ObsSceneRef,
-    sources::ObsSourceRef,
+    scenes::scene_item::SceneItemTrait,
     utils::ObsError,
 };
 
@@ -118,9 +117,9 @@ impl ObsTransformInfoBuilder {
         self
     }
 
-    /// Use alignment constants like so: `obs_alignment::LEFT | obs_alignment::TOP`
-    pub fn set_alignment(mut self, alignment: u32) -> Self {
-        self.alignment = Some(alignment);
+    /// Use alignment constants like so: `ObsAlignment::LEFT | ObsAlignment::TOP`
+    pub fn set_alignment(mut self, alignment: ObsAlignment) -> Self {
+        self.alignment = Some(alignment.bits());
         self
     }
 
@@ -139,9 +138,9 @@ impl ObsTransformInfoBuilder {
         self
     }
 
-    /// Use alignment constants like so: `obs_alignment::LEFT | obs_alignment::TOP`
-    pub fn set_bounds_alignment(mut self, bounds_alignment: u32) -> Self {
-        self.bounds_alignment = Some(bounds_alignment);
+    /// Use alignment constants like so: `ObsAlignment::LEFT | ObsAlignment::TOP`
+    pub fn set_bounds_alignment(mut self, bounds_alignment: ObsAlignment) -> Self {
+        self.bounds_alignment = Some(bounds_alignment.bits());
         self
     }
 
@@ -151,12 +150,11 @@ impl ObsTransformInfoBuilder {
     }
 
     /// Builds the `ObsTransformInfo` instance and keeps values that have not been set the same.
-    pub fn build_with_fallback(
+    pub fn build_with_fallback<T: SceneItemTrait>(
         self,
-        scene: &ObsSceneRef,
-        source: &ObsSourceRef,
+        scene_item: &T,
     ) -> Result<ObsTransformInfo, ObsError> {
-        let current = scene.get_transform_info(source)?;
+        let current = scene_item.get_transform_info()?;
         let bounds_type = self
             .bounds_type
             .unwrap_or_else(|| current.get_bounds_type());

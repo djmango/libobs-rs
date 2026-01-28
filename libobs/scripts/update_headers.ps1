@@ -1,7 +1,18 @@
 param(
     [string]$Branch = "", # Allow specifying branch as a parameter
-    [string]$Repository = "obsproject/obs-studio"
+    [string]$Repository = "obsproject/obs-studio",
+    [switch]$DryRun = $false # Enable dry-run mode without making changes
 )
+
+# Enable error handling
+$ErrorActionPreference = "Stop"
+
+if ($DryRun) {
+    Write-Host "================================" -ForegroundColor Yellow
+    Write-Host "DRY RUN MODE ENABLED" -ForegroundColor Yellow
+    Write-Host "No files will be modified" -ForegroundColor Yellow
+    Write-Host "================================" -ForegroundColor Yellow
+}
 
 # Function to get the latest release tag from GitHub
 function Get-LatestReleaseTag
@@ -13,7 +24,7 @@ function Get-LatestReleaseTag
 # Set up paths
 $tempDir = Join-Path -Path $env:TEMP -ChildPath "obs-studio-temp"
 $targetHeaderDir = Join-Path -Path $PSScriptRoot -ChildPath "../headers/obs"
-$targetBindingsPath = Join-Path -Path $PSScriptRoot -ChildPath "../src/bindings.rs"
+$targetBindingsPath = Join-Path -Path $PSScriptRoot -ChildPath "../src/bindings_win.rs"
 
 # Determine which branch/tag to use
 if ( [string]::IsNullOrEmpty($Branch))
@@ -30,7 +41,12 @@ else
 if (Test-Path -Path $tempDir)
 {
     Write-Host "Cleaning up existing temporary directory..."
-    Remove-Item -Path $tempDir -Recurse -Force
+    if (-not $DryRun) {
+        Remove-Item -Path $tempDir -Recurse -Force
+    }
+    else {
+        Write-Host "[DRY RUN] Would remove directory: $tempDir" -ForegroundColor Cyan
+    }
 }
 
 # Clone the repository with depth 1
@@ -47,13 +63,23 @@ if (-not $?)
 if (-not (Test-Path -Path $targetHeaderDir))
 {
     Write-Host "Creating target directory for headers..."
-    New-Item -Path $targetHeaderDir -ItemType Directory -Force | Out-Null
+    if (-not $DryRun) {
+        New-Item -Path $targetHeaderDir -ItemType Directory -Force | Out-Null
+    }
+    else {
+        Write-Host "[DRY RUN] Would create directory: $targetHeaderDir" -ForegroundColor Cyan
+    }
 }
 else
 {
     # Clear existing header files
     Write-Host "Clearing existing header files from target directory..."
-    Remove-Item -Path "$targetHeaderDir\*" -Recurse -Force
+    if (-not $DryRun) {
+        Remove-Item -Path "$targetHeaderDir\*" -Recurse -Force
+    }
+    else {
+        Write-Host "[DRY RUN] Would remove existing files in: $targetHeaderDir" -ForegroundColor Cyan
+    }
 }
 
 # Copy header files from libobs to the target directory
@@ -74,10 +100,18 @@ foreach ($file in $headerFiles)
     $destinationDir = Split-Path -Path $destination -Parent
     if (-not (Test-Path -Path $destinationDir))
     {
-        New-Item -Path $destinationDir -ItemType Directory -Force | Out-Null
+        if (-not $DryRun) {
+            New-Item -Path $destinationDir -ItemType Directory -Force | Out-Null
+        }
     }
 
-    Copy-Item -Path $file.FullName -Destination $destination -Force
+    if (-not $DryRun) {
+        Copy-Item -Path $file.FullName -Destination $destination -Force
+    }
+}
+
+if ($DryRun) {
+    Write-Host "[DRY RUN] Would copy $($headerFiles.Count) header files to: $targetHeaderDir" -ForegroundColor Cyan
 }
 
 Write-Host "Configuring CMake for libobs..."
@@ -92,20 +126,25 @@ finally
     Pop-Location
 }
 
-Copy-Item $tempDir/build_x64/libobs/RelWithDebInfo/obs.lib $PSScriptRoot/../
-git clone "https://github.com/sshcrack/dummy-dll-generator" --depth 1 $tempDir/dummy-dll
+if (-not $DryRun) {
+    Copy-Item $tempDir/build_x64/libobs/RelWithDebInfo/obs.lib $PSScriptRoot/../
+    git clone "https://github.com/sshcrack/dummy-dll-generator" --depth 1 $tempDir/dummy-dll
 
-Push-Location $PSScriptRoot/../../libobs-bootstrapper/assets/
-try
-{
-    . $tempDir/dummy-dll/dummyDLL.exe $tempDir/build_x64/libobs/RelWithDebInfo/obs.dll
-    Move-Item out.dll obs-dummy.dll -Force
-    Remove-Item out.exp -Force
-    Remove-Item out.lib -Force
+    Push-Location $PSScriptRoot/../../libobs-bootstrapper/assets/
+    try
+    {
+        . $tempDir/dummy-dll/dummyDLL.exe $tempDir/build_x64/libobs/RelWithDebInfo/obs.dll
+        Move-Item out.dll obs-dummy.dll -Force
+        Remove-Item out.exp -Force
+        Remove-Item out.lib -Force
+    }
+    finally
+    {
+        Pop-Location
+    }
 }
-finally
-{
-    Pop-Location
+else {
+    Write-Host "[DRY RUN] Would copy obs.lib and generate dummy DLL" -ForegroundColor Cyan
 }
 
 
@@ -131,37 +170,69 @@ $versionHeaderContent = @'
 '@
 
 Write-Host "Writing version header to $versionHeaderPath"
-Set-Content -LiteralPath $versionHeaderPath -Value $versionHeaderContent -Encoding UTF8
+if (-not $DryRun) {
+    Set-Content -LiteralPath $versionHeaderPath -Value $versionHeaderContent -Encoding UTF8
+}
+else {
+    Write-Host "[DRY RUN] Would write obsconfig.h to: $versionHeaderPath" -ForegroundColor Cyan
+}
 
-git -C $PSScriptRoot/../ apply $PSScriptRoot/patches/001_gh_action_fix_compile.patch
+if (-not $DryRun) {
+    git -C $PSScriptRoot/../ apply $PSScriptRoot/patches/001_gh_action_fix_compile.patch
+}
+else {
+    Write-Host "[DRY RUN] Would apply patch: 001_gh_action_fix_compile.patch" -ForegroundColor Cyan
+}
 
 # Build bindings and copy to src/bindings.rs
 Write-Host "Building bindings..."
-cargo build --features generate_bindings --target-dir $tempDir --release
+if (-not $DryRun) {
+    cargo build --features generate_bindings --target-dir $tempDir --release
 
-# Get the bindings.rs file
-$bindings = Get-ChildItem -Path $tempDir/release/build -Recurse -Filter "bindings.rs" |
-        Where-Object { $_.FullName -match "libobs-[^\\]+\\out\\bindings.rs" } |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -First 1
+    # Get the bindings.rs file
+    $bindings = Get-ChildItem -Path $tempDir/release/build -Recurse -Filter "bindings.rs" |
+            Where-Object { $_.FullName -match "libobs-[^\\]+\\out\\bindings.rs" } |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
 
-if ($bindings)
-{
-    Write-Host "Found: $( $bindings.FullName )"
-    Write-Host "Copying to: $targetBindingsPath"
-    Copy-Item -Path $bindings.FullName -Destination $targetBindingsPath -Force
+    if ($bindings)
+    {
+        Write-Host "Found: $( $bindings.FullName )"
+        Write-Host "Copying to: $targetBindingsPath"
+        Copy-Item -Path $bindings.FullName -Destination $targetBindingsPath -Force
+    }
+    else
+    {
+        Write-Warning "No bindings.rs file found for libobs-* in $buildPath"
+    }
 }
-else
-{
-    Write-Warning "No bindings.rs file found for libobs-* in $buildPath"
+else {
+    Write-Host "[DRY RUN] Would build bindings with cargo" -ForegroundColor Cyan
+    Write-Host "[DRY RUN] Would copy generated bindings.rs to: $targetBindingsPath" -ForegroundColor Cyan
 }
 
 Write-Host "Cleaning up temporary directory..."
-Remove-Item -Path $tempDir -Recurse -Force
+if (-not $DryRun) {
+    Remove-Item -Path $tempDir -Recurse -Force
+}
+else {
+    Write-Host "[DRY RUN] Would remove temporary directory: $tempDir" -ForegroundColor Cyan
+}
 
 Write-Host "Updating mock files..."
-Invoke-WebRequest "https://api.github.com/repos/libobs-rs/libobs-builds/releases" -OutFile $PSScriptRoot/../../libobs-bootstrapper/mock_responses/libobs_builds_release.json
-Invoke-WebRequest "https://api.github.com/repos/obsproject/obs-studio/releases" -OutFile $PSScriptRoot/../../cargo-obs-build/mock_responses/obs_studio_release.json
-Invoke-WebRequest "https://api.github.com/repos/obsproject/obs-studio/releases/latest" -OutFile $PSScriptRoot/../../cargo-obs-build/mock_responses/obs_studio_release_latest.json
+if (-not $DryRun) {
+    Invoke-WebRequest "https://api.github.com/repos/libobs-rs/libobs-builds/releases" -OutFile $PSScriptRoot/../../libobs-bootstrapper/mock_responses/libobs_builds_release.json
+    Invoke-WebRequest "https://api.github.com/repos/obsproject/obs-studio/releases" -OutFile $PSScriptRoot/../../cargo-obs-build/mock_responses/obs_studio_release.json
+    Invoke-WebRequest "https://api.github.com/repos/obsproject/obs-studio/releases/latest" -OutFile $PSScriptRoot/../../cargo-obs-build/mock_responses/obs_studio_release_latest.json
+}
+else {
+    Write-Host "[DRY RUN] Would download and update mock response files" -ForegroundColor Cyan
+}
 
-Write-Host "Header files updated successfully!"
+if ($DryRun) {
+    Write-Host ""
+    Write-Host "Dry run completed successfully!" -ForegroundColor Green
+}
+else {
+    Write-Host "Header files updated successfully!" -ForegroundColor Green
+}

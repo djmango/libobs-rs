@@ -1,11 +1,18 @@
 use libobs_simple::output::simple::ObsContextSimpleExt;
 #[cfg(target_os = "linux")]
+use libobs_simple::sources::ObsSourceBuilder;
+use libobs_wrapper::data::output::ObsOutputTrait;
+#[cfg(target_os = "linux")]
 use libobs_wrapper::logger::ObsLogger;
+#[cfg(windows)]
+use libobs_wrapper::scenes::SceneItemTrait;
 use libobs_wrapper::utils::StartupInfo;
 use libobs_wrapper::{context::ObsContext, utils::ObsPath};
 
+#[cfg(target_os = "linux")]
+use libobs_simple::sources::linux::LinuxGeneralScreenCaptureBuilder;
 #[cfg(windows)]
-use libobs_simple::sources::windows::{MonitorCaptureSourceBuilder, MonitorCaptureSourceUpdater};
+use libobs_simple::sources::windows::MonitorCaptureSourceBuilder;
 #[cfg(windows)]
 use libobs_wrapper::data::ObsObjectUpdater;
 #[cfg(windows)]
@@ -24,6 +31,7 @@ use libobs_wrapper::sources::ObsSourceBuilder;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::io::{self, Write};
 
+
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
 pub struct NoLogger {}
@@ -33,6 +41,8 @@ impl ObsLogger for NoLogger {
 }
 
 fn main() -> anyhow::Result<()> {
+    env_logger::init();
+
     // Start the OBS context
     let startup_info = StartupInfo::default();
 
@@ -42,30 +52,33 @@ fn main() -> anyhow::Result<()> {
 
     let mut context = ObsContext::new(startup_info)?;
 
-    let mut scene = context.scene("main")?;
+    let mut scene = context.scene("main", Some(0))?;
 
     // Platform-specific screen/monitor capture setup
     #[cfg(windows)]
     let monitors = MonitorCaptureSourceBuilder::get_monitors()?;
 
     #[cfg(windows)]
-    let mut monitor_capture = context
+    let mut monitor_item = context
         .source_builder::<MonitorCaptureSourceBuilder, _>("Monitor Capture")?
         .set_monitor(&monitors[0])
+        .set_capture_method(libobs_simple::sources::windows::ObsDisplayCaptureMethod::MethodDXGI)
         .add_to_scene(&mut scene)?;
+
+    #[cfg(windows)]
+    monitor_item.fit_source_to_screen()?;
 
     #[cfg(target_os = "linux")]
     {
         // You could also read a restore token here from a file
-        let screen_capture = LinuxGeneralScreenCapture::auto_detect(
-            context.runtime().clone(),
-            "Screen Capture",
-            None,
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to create screen capture: {}", e))?;
+
+        use libobs_wrapper::data::ObsObjectBuilder;
+        let screen_capture =
+            LinuxGeneralScreenCaptureBuilder::new("Screen Capture", context.runtime().clone())
+                .map_err(|e| anyhow::anyhow!("Failed to create screen capture: {}", e))?;
 
         println!(
-            "Using {} capture method",
+            "Using {:?} capture method",
             screen_capture.capture_type_name()
         );
 
@@ -84,9 +97,6 @@ fn main() -> anyhow::Result<()> {
         println!("Using macOS ScreenCaptureKit for screen capture");
     }
 
-    // Common output and encoder setup
-    scene.set_to_channel(0)?;
-
     // Set up output to ./recording.mp4
     let mut output = context
         .simple_output_builder("monitor-capture-output", ObsPath::new("record.mp4"))
@@ -103,9 +113,10 @@ fn main() -> anyhow::Result<()> {
         thread::sleep(Duration::from_secs(5));
 
         // Switching monitor
-        monitor_capture
-            .create_updater::<MonitorCaptureSourceUpdater>()?
-            .set_monitor(&monitors[1])
+        monitor_item
+            .inner_source_mut()
+            .create_updater()?
+            .set_monitor(&monitors[1 % monitors.len()])
             .update()?;
 
         println!("Recording for another 5 seconds...");

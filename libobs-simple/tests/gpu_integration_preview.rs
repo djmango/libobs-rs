@@ -1,27 +1,31 @@
-// This test is only implemented for Windows and Linux
+#![allow(unknown_lints, require_safety_comments_on_unsafe)]
+// TODO This test is only implemented for Windows and Linux
 #![cfg(any(windows, target_os = "linux"))]
 
 use std::sync::{Arc, RwLock};
 
 #[cfg(target_os = "linux")]
-use libobs_simple::sources::linux::LinuxGeneralScreenCapture;
+use libobs_simple::sources::linux::{
+    LinuxGeneralScreenCaptureBuilder, LinuxGeneralScreenCaptureSourceRef,
+};
 #[cfg(target_os = "linux")]
-use libobs_simple::sources::linux::PipeWireSourceExtTrait;
+use libobs_simple::sources::ObsEitherSource;
 use libobs_wrapper::graphics::Vec2;
+#[cfg(target_os = "linux")]
+use libobs_wrapper::scenes::ObsSceneItemRef;
+use libobs_wrapper::scenes::SceneItemTrait;
 #[cfg(target_os = "linux")]
 use libobs_wrapper::utils::NixDisplay;
 
 #[cfg(windows)]
 use libobs_simple::sources::windows::{
-    GameCaptureSourceBuilder, MonitorCaptureSourceBuilder, ObsGameCaptureMode, WindowSearchMode,
+    GameCaptureSourceBuilder, MonitorCaptureSourceBuilder, WindowSearchMode,
 };
 use libobs_wrapper::data::video::ObsVideoInfoBuilder;
 use libobs_wrapper::display::{
     ObsDisplayCreationData, ObsDisplayRef, ObsWindowHandle, WindowPositionTrait,
 };
-#[cfg(windows)]
 use libobs_wrapper::sources::ObsSourceBuilder;
-use libobs_wrapper::sources::ObsSourceRef;
 use libobs_wrapper::unsafe_send::Sendable;
 use libobs_wrapper::{context::ObsContext, utils::StartupInfo};
 use winit::application::ApplicationHandler;
@@ -41,7 +45,8 @@ use winit::window::{Window, WindowId};
 struct ObsInner {
     context: ObsContext,
     display: ObsDisplayRef,
-    _source: ObsSourceRef,
+    #[cfg(target_os = "linux")]
+    _source: ObsSceneItemRef<LinuxGeneralScreenCaptureSourceRef>,
 }
 
 impl ObsInner {
@@ -66,7 +71,7 @@ impl ObsInner {
         }
 
         let mut context = info.start()?;
-        let mut scene = context.scene("Main Scene")?;
+        let mut scene = context.scene("Main Scene", Some(0))?;
 
         #[cfg(windows)]
         let apex = GameCaptureSourceBuilder::get_windows(WindowSearchMode::ExcludeMinimized)?;
@@ -76,7 +81,7 @@ impl ObsInner {
             .find(|e| e.title.is_some() && e.title.as_ref().unwrap().contains("Apex"));
 
         #[cfg(windows)]
-        let monitor_src = context
+        let monitor_item = context
             .source_builder::<MonitorCaptureSourceBuilder, _>("Monitor capture")?
             .set_monitor(
                 &MonitorCaptureSourceBuilder::get_monitors().expect("Couldn't get monitors")[0],
@@ -84,7 +89,7 @@ impl ObsInner {
             .add_to_scene(&mut scene)?;
 
         #[cfg(target_os = "linux")]
-        let monitor_src = {
+        let monitor_item = {
             use std::path::PathBuf;
 
             let restore_token_path = std::env::current_exe()
@@ -98,40 +103,35 @@ impl ObsInner {
                 None
             };
 
-            LinuxGeneralScreenCapture::auto_detect(
-                context.runtime().clone(),
-                "Monitor capture",
-                restore_token,
-            )
-            .unwrap()
-            .add_to_scene(&mut scene)?
+            context
+                .source_builder::<LinuxGeneralScreenCaptureBuilder, _>("Monitor capture")
+                .unwrap()
+                .set_restore_token(&restore_token.unwrap_or_default())
+                .add_to_scene(&mut scene)?
         };
 
-        scene.set_source_position(&monitor_src, Vec2::new(0.0, 0.0))?;
-        scene.set_source_scale(&monitor_src, Vec2::new(1.0, 1.0))?;
+        monitor_item.set_source_position(Vec2::new(0.0, 0.0))?;
+        monitor_item.set_source_scale(Vec2::new(1.0, 1.0))?;
 
         #[cfg(windows)]
-        let mut _apex_source = None;
-        #[cfg(windows)]
         if let Some(apex) = apex {
+            use libobs_simple::sources::windows::game_capture::ObsGameCaptureMode;
+
             println!(
                 "Is used by other instance: {}",
                 GameCaptureSourceBuilder::is_window_in_use_by_other_instance(apex.pid)?
             );
-            let source = context
+            let item = context
                 .source_builder::<GameCaptureSourceBuilder, _>("Game capture")?
                 .set_capture_mode(ObsGameCaptureMode::CaptureSpecificWindow)
                 .set_window(apex)
                 .add_to_scene(&mut scene)?;
 
-            scene.set_source_position(&source, Vec2::new(0.0, 0.0))?;
-            scene.set_source_scale(&source, Vec2::new(1.0, 1.0))?;
-            _apex_source = Some(source);
+            item.set_source_position(Vec2::new(0.0, 0.0))?;
+            item.set_source_scale(Vec2::new(1.0, 1.0))?;
         } else {
             println!("No Apex window found for game capture");
         }
-
-        scene.set_to_channel(0)?;
 
         let hwnd = window.window_handle().unwrap().as_raw();
 
@@ -169,7 +169,8 @@ impl ObsInner {
         Ok(Self {
             context,
             display,
-            _source: monitor_src,
+            #[cfg(target_os = "linux")]
+            _source: monitor_item,
         })
     }
 }
@@ -214,14 +215,16 @@ impl ApplicationHandler for App {
         inner.context.remove_display(&inner.display).unwrap();
 
         #[cfg(target_os = "linux")]
-        if let Ok(Some(token)) = inner._source.get_restore_token() {
-            let restore_token_path = std::env::current_exe()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .join(std::path::PathBuf::from("pipewire_restore_token.txt"));
+        if let ObsEitherSource::Right(pipewire) = inner._source.inner_source() {
+            if let Ok(Some(token)) = pipewire.get_restore_token() {
+                let restore_token_path = std::env::current_exe()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .join(std::path::PathBuf::from("pipewire_restore_token.txt"));
 
-            std::fs::write(restore_token_path, token).unwrap();
+                std::fs::write(restore_token_path, token).unwrap();
+            }
         }
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {

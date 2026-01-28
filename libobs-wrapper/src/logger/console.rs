@@ -14,6 +14,8 @@ impl Default for ConsoleLogger {
 }
 
 impl ConsoleLogger {
+    /// Creates a new `ConsoleLogger`, which either prints directly to the console. If the feature `color-logger` is enabled,
+    /// output will be colorized in the console.
     pub fn new() -> Self {
         Self { _private: () }
     }

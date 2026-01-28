@@ -1,3 +1,9 @@
+//! This module is used to handle properties in OBS.
+//! Properties essentially tell you what settings for example a output accepts, by using the ´get_properties´ method
+//! on the according struct.
+//! This lets you get all properties at runtime, rather than having to rely on preset values, which
+//! can be useful if you want to let the user adust specific system dependent settings on for example an encoder.
+
 mod enums;
 mod macros;
 pub mod prop_impl;
@@ -12,11 +18,33 @@ pub use enums::*;
 use types::*;
 
 use crate::{
-    run_with_obs,
+    impl_obs_drop, run_with_obs,
     runtime::ObsRuntime,
-    unsafe_send::Sendable,
-    utils::{ObsError, ObsString},
+    unsafe_send::{Sendable, SmartPointerSendable},
+    utils::{ObsDropGuard, ObsError, ObsString},
 };
+
+#[derive(Debug)]
+pub(crate) struct _ObsPropertiesDropGuard {
+    properties: Sendable<*mut obs_properties>,
+    runtime: ObsRuntime,
+}
+
+impl ObsDropGuard for _ObsPropertiesDropGuard {}
+
+impl_obs_drop!(_ObsPropertiesDropGuard, (properties), move || unsafe {
+    // Safety: The pointer is valid as long as we are in the runtime and the guard is alive.
+    libobs::obs_properties_destroy(properties.0);
+});
+
+impl _ObsPropertiesDropGuard {
+    pub(crate) fn new(properties: Sendable<*mut obs_properties>, runtime: ObsRuntime) -> Self {
+        Self {
+            properties,
+            runtime,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum ObsProperty {
@@ -51,43 +79,63 @@ pub enum ObsProperty {
 }
 
 pub trait ObsPropertyObjectPrivate {
-    fn get_properties_raw(&self) -> Result<Sendable<*mut libobs::obs_properties_t>, ObsError>;
+    fn get_properties_raw(
+        &self,
+    ) -> Result<SmartPointerSendable<*mut libobs::obs_properties_t>, ObsError>;
     fn get_properties_by_id_raw<T: Into<ObsString> + Sync + Send>(
         id: T,
         runtime: ObsRuntime,
-    ) -> Result<Sendable<*mut libobs::obs_properties_t>, ObsError>;
+    ) -> Result<SmartPointerSendable<*mut libobs::obs_properties_t>, ObsError>;
 }
 
-pub(crate) fn get_properties_inner(
-    properties_raw: Sendable<*mut obs_properties>,
+pub(crate) fn property_ptr_to_struct(
+    properties_raw: SmartPointerSendable<*mut obs_properties>,
     runtime: ObsRuntime,
 ) -> Result<HashMap<String, ObsProperty>, ObsError> {
-    let properties_raw = properties_raw.clone();
-    if properties_raw.0.is_null() {
-        let ptr_clone = properties_raw.clone();
-        run_with_obs!(runtime, (ptr_clone), move || {
-            unsafe { libobs::obs_properties_destroy(ptr_clone) };
-        })?;
-
-        return Ok(HashMap::new());
-    }
-
-    run_with_obs!(runtime, (properties_raw), move || {
+    let runtime_clone = runtime.clone();
+    run_with_obs!(runtime, (properties_raw, runtime_clone), move || {
         let mut result = HashMap::new();
-        let mut property = unsafe { libobs::obs_properties_first(properties_raw) };
+        let mut property = unsafe {
+            // Safety: Safe because of smart pointer
+            libobs::obs_properties_first(properties_raw.get_ptr())
+        };
         while !property.is_null() {
             let name = unsafe { libobs::obs_property_name(property) };
-            let name = unsafe { CStr::from_ptr(name as _) };
+            if name.is_null() {
+                let success = unsafe {
+                    // Safety: Safe because property is not null and we are just moving forward.
+                    libobs::obs_property_next(&mut property)
+                };
+
+                if !success {
+                    break;
+                }
+                continue;
+            }
+
+            let name = unsafe {
+                // Safety: Safe because of we did a null check
+                CStr::from_ptr(name as _)
+            };
             let name = name.to_string_lossy().to_string();
 
-            let p_type = unsafe { libobs::obs_property_get_type(property) };
+            let p_type = unsafe {
+                // Safety: Safe because we just got the property pointer
+                libobs::obs_property_get_type(property)
+            };
 
             let p_type = crate::macros::enum_from_number!(ObsPropertyType, p_type);
 
             log::trace!("Property: {:?}", name);
             match p_type {
                 Some(p_type) => {
-                    result.insert(name, unsafe { p_type.to_property_struct(property) });
+                    let prop_struct = unsafe {
+                        // Safety: Safe because we just got the property pointer
+                        p_type.get_property_struct(&runtime_clone, Sendable(property))
+                    };
+                    if let Ok(r) = prop_struct {
+                        result.insert(name, r);
+                    }
                 }
                 None => {
                     result.insert(name, ObsProperty::Invalid);
@@ -95,10 +143,16 @@ pub(crate) fn get_properties_inner(
             }
 
             // Move to the next property
-            unsafe { libobs::obs_property_next(&mut property) };
+            let has_next = unsafe {
+                // Safety: We didn't drop the property, so it is still valid and we can proceed
+                libobs::obs_property_next(&mut property)
+            };
+
+            if !has_next {
+                break;
+            }
         }
 
-        unsafe { libobs::obs_properties_destroy(properties_raw) };
         result
     })
 }
@@ -107,11 +161,11 @@ pub(crate) fn get_properties_inner(
 pub trait ObsPropertyObject: ObsPropertyObjectPrivate {
     /// Returns the properties of the object
     fn get_properties(&self) -> Result<HashMap<String, ObsProperty>, ObsError>;
-    fn get_properties_by_id<T: Into<ObsString> + Sync + Send>(
+    fn get_properties_by_source_id<T: Into<ObsString> + Sync + Send>(
         id: T,
         runtime: &ObsRuntime,
     ) -> Result<HashMap<String, ObsProperty>, ObsError> {
         let properties_raw = Self::get_properties_by_id_raw(id, runtime.clone())?;
-        get_properties_inner(properties_raw, runtime.clone())
+        property_ptr_to_struct(properties_raw, runtime.clone())
     }
 }

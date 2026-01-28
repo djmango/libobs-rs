@@ -22,6 +22,7 @@ impl ShowHideTrait for ObsDisplayRef {
                 .read()
                 .map_err(|e| ObsError::LockError(format!("{:?}", e)))?;
             unsafe {
+                // Safety: The window handle is valid as long as the ObsDisplayRef exists
                 let _ = ShowWindow(m.window_handle.get_hwnd(), SW_SHOWNA);
             }
 
@@ -29,9 +30,12 @@ impl ShowHideTrait for ObsDisplayRef {
             return Ok(());
         }
 
-        let ptr = self.display.clone();
-        run_with_obs!(self.runtime, (ptr), move || unsafe {
-            libobs::obs_display_set_enabled(ptr, true);
+        let ptr = self.as_ptr();
+        run_with_obs!(self.runtime, (ptr), move || {
+            unsafe {
+                // Safety: The pointer is valid because we are using a smart pointer
+                libobs::obs_display_set_enabled(ptr.get_ptr(), true);
+            }
         })?;
         Ok(())
     }
@@ -45,6 +49,7 @@ impl ShowHideTrait for ObsDisplayRef {
                 .map_err(|e| ObsError::LockError(format!("{:?}", e)))?;
 
             unsafe {
+                // Safety: The window handle is valid as long as the ObsDisplayRef exists
                 let _ = ShowWindow(m.window_handle.get_hwnd(), SW_HIDE);
             }
 
@@ -52,9 +57,12 @@ impl ShowHideTrait for ObsDisplayRef {
             return Ok(());
         }
 
-        let ptr = self.display.clone();
-        run_with_obs!(self.runtime, (ptr), move || unsafe {
-            libobs::obs_display_set_enabled(ptr, false);
+        let ptr = self.as_ptr();
+        run_with_obs!(self.runtime, (ptr), move || {
+            unsafe {
+                // Safety: The pointer is valid because we are using a smart pointer
+                libobs::obs_display_set_enabled(ptr.get_ptr(), false);
+            }
         })?;
         Ok(())
     }
@@ -69,9 +77,13 @@ impl ShowHideTrait for ObsDisplayRef {
             return Ok(!m.is_hidden.load(Ordering::Relaxed));
         }
 
-        let ptr = self.display.clone();
-        run_with_obs!(self.runtime, (ptr), move || unsafe {
-            let enabled = libobs::obs_display_enabled(ptr);
+        let ptr = self.as_ptr();
+        run_with_obs!(self.runtime, (ptr), move || {
+            let enabled = unsafe {
+                // Safety: The pointer is valid because we are using a smart pointer
+                libobs::obs_display_enabled(ptr.get_ptr())
+            };
+
             Ok(enabled)
         })?
     }

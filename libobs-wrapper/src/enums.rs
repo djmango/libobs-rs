@@ -1,6 +1,8 @@
+//! Contains all important enums for this crate
 use core::fmt;
 use std::fmt::Display;
 
+use bitflags::bitflags;
 use num_derive::{FromPrimitive, ToPrimitive};
 
 #[cfg(target_os = "windows")]
@@ -286,10 +288,14 @@ pub enum ObsBoundsType {
     MaxOnly = libobs::obs_bounds_type_OBS_BOUNDS_MAX_ONLY,
 }
 
-pub mod obs_alignment {
-    pub const LEFT: u32 = libobs::OBS_ALIGN_LEFT;
-    pub const TOP: u32 = libobs::OBS_ALIGN_TOP;
-    pub const RIGHT: u32 = libobs::OBS_ALIGN_RIGHT;
-    pub const BOTTOM: u32 = libobs::OBS_ALIGN_BOTTOM;
-    pub const CENTER: u32 = libobs::OBS_ALIGN_CENTER;
+bitflags! {
+    /// Represents a set of flags.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub struct ObsAlignment: u32 {
+        const LEFT = libobs::OBS_ALIGN_LEFT;
+        const TOP = libobs::OBS_ALIGN_TOP;
+        const RIGHT = libobs::OBS_ALIGN_RIGHT;
+        const BOTTOM = libobs::OBS_ALIGN_BOTTOM;
+        const CENTER = libobs::OBS_ALIGN_CENTER;
+    }
 }

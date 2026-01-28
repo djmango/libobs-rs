@@ -1,4 +1,10 @@
-use crate::define_object_manager;
+use crate::{
+    define_object_manager,
+    sources::{
+        macro_helper::impl_custom_source,
+        windows::{ObsHookableSourceSignals, ObsHookableSourceTrait},
+    },
+};
 
 use super::{ObsWindowCaptureMethod, ObsWindowPriority};
 use crate::error::ObsSimpleError;
@@ -7,7 +13,7 @@ use libobs_simple_macro::obs_object_impl;
 use libobs_window_helper::{get_all_windows, WindowInfo, WindowSearchMode};
 use libobs_wrapper::{
     data::{ObsObjectBuilder, ObsObjectUpdater},
-    scenes::ObsSceneRef,
+    scenes::{ObsSceneItemRef, ObsSceneRef, SceneItemExtSceneTrait},
     sources::{ObsSourceBuilder, ObsSourceRef},
     utils::ObsError,
 };
@@ -16,7 +22,7 @@ use num_traits::ToPrimitive;
 define_object_manager!(
     /// Provides an easy-to-use builder for the window capture source.
     #[derive(Debug)]
-    struct WindowCaptureSource("window_capture") for ObsSourceRef {
+    struct WindowCaptureSource("window_capture", *mut libobs::obs_source) for ObsSourceRef {
 
     /// Sets the priority of the window capture source.
     /// Used to determine in which order windows are searched for.
@@ -116,7 +122,7 @@ impl WindowCaptureSource {
     pub fn set_capture_audio(mut self, capture_audio: bool) -> Result<Self, ObsSimpleError> {
         use crate::sources::windows::audio_capture_available;
 
-        if capture_audio && !audio_capture_available() {
+        if capture_audio && !audio_capture_available(self.runtime())? {
             return Err(ObsSimpleError::FeatureNotAvailable(
                 "Game Audio Capture is not available on this system",
             ));
@@ -129,8 +135,31 @@ impl WindowCaptureSource {
     }
 }
 
+impl_custom_source!(
+    WindowCaptureSource,
+    ObsHookableSourceSignals,
+    NO_SPECIFIC_SIGNALS_FUNCTION
+);
+
+impl ObsHookableSourceTrait for WindowCaptureSource {
+    fn source_specific_signals(&self) -> std::sync::Arc<ObsHookableSourceSignals> {
+        self.source_specific_signals.clone()
+    }
+}
+
 impl ObsSourceBuilder for WindowCaptureSourceBuilder {
-    fn add_to_scene(mut self, scene: &mut ObsSceneRef) -> Result<ObsSourceRef, ObsError>
+    type T = WindowCaptureSource;
+
+    fn build(self) -> Result<Self::T, ObsError> {
+        let runtime = self.runtime.clone();
+
+        let b = self.object_build()?;
+
+        let source = ObsSourceRef::new_from_info(b, runtime)?;
+        WindowCaptureSource::new(source)
+    }
+
+    fn add_to_scene(mut self, scene: &mut ObsSceneRef) -> Result<ObsSceneItemRef<Self::T>, ObsError>
     where
         Self: Sized,
     {
@@ -141,17 +170,16 @@ impl ObsSourceBuilder for WindowCaptureSourceBuilder {
         );
 
         let method_to_set = self.capture_method;
-        let runtime = self.runtime.clone();
-
-        let b = self.build()?;
-        let mut res = scene.add_source(b)?;
+        let mut source = self.build()?;
+        let scene_item = scene.add_source(source.clone())?;
 
         if let Some(method) = method_to_set {
-            WindowCaptureSourceUpdater::create_update(runtime, &mut res)?
+            source
+                .create_updater()?
                 .set_capture_method(method)
                 .update()?;
         }
 
-        Ok(res)
+        Ok(scene_item)
     }
 }

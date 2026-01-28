@@ -1,9 +1,13 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![allow(
+    unknown_lints,
     non_camel_case_types,
     non_upper_case_globals,
     unnecessary_transmutes,
     non_snake_case,
+    no_unqualified_libobs_uses,
+    ensure_obs_call_in_runtime,
+    require_safety_comments_on_unsafe,
     clippy::all
 )]
 

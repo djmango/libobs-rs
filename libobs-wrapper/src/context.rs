@@ -43,7 +43,15 @@ use std::{
     thread::ThreadId,
 };
 
-use crate::display::{ObsDisplayCreationData, ObsDisplayRef};
+#[cfg(target_os = "linux")]
+use crate::utils::initialization::PlatformType;
+use crate::{
+    data::{
+        object::ObsObjectTrait,
+        output::{ObsOutputTrait, ObsOutputTraitSealed, ObsReplayBufferOutputRef},
+    },
+    display::{ObsDisplayCreationData, ObsDisplayRef},
+};
 use crate::{
     data::{output::ObsOutputRef, video::ObsVideoInfo, ObsData},
     enums::{ObsLogLevel, ObsResetVideoStatus},
@@ -61,6 +69,8 @@ use libobs::{audio_output, video_output};
 lazy_static::lazy_static! {
     pub(crate) static ref OBS_THREAD_ID: Mutex<Option<ThreadId>> = Mutex::new(None);
 }
+
+pub(crate) type GeneralStorage<T> = Arc<RwLock<Vec<Arc<Box<T>>>>>;
 
 /// Interface to the OBS context. Only one context
 /// can exist across all threads and any attempt to
@@ -86,36 +96,35 @@ pub struct ObsContext {
     /// early freeing.
     #[allow(dead_code)]
     #[get_mut]
-    pub(crate) outputs: Arc<RwLock<Vec<ObsOutputRef>>>,
+    outputs: GeneralStorage<dyn ObsOutputTrait>,
 
     #[get_mut]
-    pub(crate) scenes: Arc<RwLock<Vec<ObsSceneRef>>>,
+    scenes: Arc<RwLock<Vec<ObsSceneRef>>>,
 
     // Filters are on the level of the context because they are not scene-specific
     #[get_mut]
-    pub(crate) filters: Arc<RwLock<Vec<ObsFilterRef>>>,
+    filters: Arc<RwLock<Vec<ObsFilterRef>>>,
 
     #[skip_getter]
-    /// Contains active scenes mapped by their channel they are bound to
-    pub(crate) active_scenes: Arc<RwLock<HashMap<u32, ObsSceneRef>>>,
-
-    #[skip_getter]
-    pub(crate) _obs_modules: Arc<ObsModules>,
+    _obs_modules: Arc<ObsModules>,
 
     /// This struct must be the last element which makes sure
     /// that everything else has been freed already before the runtime
     /// shuts down
-    pub(crate) runtime: ObsRuntime,
+    runtime: ObsRuntime,
 
     #[cfg(target_os = "linux")]
-    pub(crate) glib_loop: Arc<RwLock<Option<crate::utils::linux::LinuxGlibLoop>>>,
+    glib_loop: Arc<RwLock<Option<crate::utils::linux::LinuxGlibLoop>>>,
 }
 
 impl ObsContext {
     /// Checks if the installed OBS version matches the expected version.
     /// Returns true if the major version matches, false otherwise.
     pub fn check_version_compatibility() -> bool {
+        // Safety: This is fine, we are just getting a version string, which doesn't allocate any memory or have side effects.
         unsafe {
+            #[allow(unknown_lints)]
+            #[allow(ensure_obs_call_in_runtime)]
             let version = libobs::obs_get_version_string();
             if version.is_null() {
                 return false;
@@ -163,6 +172,11 @@ impl ObsContext {
     /// If initialization fails, an `ObsError` is returned.
     pub fn new(info: StartupInfo) -> Result<ObsContext, ObsError> {
         log::trace!("Getting version number...");
+
+        #[allow(unknown_lints)]
+        #[allow(ensure_obs_call_in_runtime)]
+        // Safety: This is fine, we are just getting a version number, which does not require
+        // to be on the OBS thread.
         let version_numb = unsafe { libobs::obs_get_version() };
         if version_numb == 0 {
             return Err(ObsError::InvalidDll);
@@ -177,10 +191,8 @@ impl ObsContext {
             None
         };
 
-        let active_scenes: Arc<RwLock<HashMap<u32, ObsSceneRef>>> = Default::default();
         Ok(Self {
             _obs_modules: Arc::new(obs_modules),
-            active_scenes: active_scenes.clone(),
             displays: Default::default(),
             outputs: Default::default(),
             scenes: Default::default(),
@@ -192,12 +204,20 @@ impl ObsContext {
         })
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn get_platform(&self) -> Result<PlatformType, ObsError> {
+        self.runtime.get_platform()
+    }
+
     pub fn get_version(&self) -> Result<String, ObsError> {
         Self::get_version_global()
     }
 
     pub fn get_version_global() -> Result<String, ObsError> {
         unsafe {
+            #[allow(unknown_lints)]
+            #[allow(ensure_obs_call_in_runtime)]
+            // Safety: This is fine, it just returns a globally allocated variable
             let version = libobs::obs_get_version_string();
             let version_cstr = CStr::from_ptr(version);
 
@@ -264,7 +284,8 @@ impl ObsContext {
         // anything tied to the OBS context.
         let vid_ptr = Sendable(ovi.as_ptr());
         let reset_video_status = run_with_obs!(self.runtime, (vid_ptr), move || unsafe {
-            libobs::obs_reset_video(vid_ptr)
+            // Safety: OVI is still in scope, so the pointer is valid as well.
+            libobs::obs_reset_video(vid_ptr.0)
         })?;
 
         let reset_video_status = num_traits::FromPrimitive::from_i32(reset_video_status);
@@ -295,6 +316,7 @@ impl ObsContext {
     pub unsafe fn get_video_ptr(&self) -> Result<Sendable<*mut video_output>, ObsError> {
         // Removed safeguards here because ptr are not sendable and this OBS context should never be used across threads
         run_with_obs!(self.runtime, || unsafe {
+            // Safety: This can be called as long as OBS hasn't shutdown, which it hasn't.
             Sendable(libobs::obs_get_video())
         })
     }
@@ -306,12 +328,35 @@ impl ObsContext {
     pub unsafe fn get_audio_ptr(&self) -> Result<Sendable<*mut audio_output>, ObsError> {
         // Removed safeguards here because ptr are not sendable and this OBS context should never be used across threads
         run_with_obs!(self.runtime, || unsafe {
+            // Safety: This can be called as long as OBS hasn't shutdown, which it hasn't.
             Sendable(libobs::obs_get_audio())
         })
     }
 
     pub fn data(&self) -> Result<ObsData, ObsError> {
         ObsData::new(self.runtime.clone())
+    }
+
+    pub fn replay_buffer(
+        &mut self,
+        info: OutputInfo,
+    ) -> Result<ObsReplayBufferOutputRef, ObsError> {
+        let output = ObsReplayBufferOutputRef::new(info, self.runtime.clone());
+
+        match output {
+            Ok(x) => {
+                let tmp = x.clone();
+                self.outputs
+                    .write()
+                    .map_err(|_| {
+                        ObsError::LockError("Failed to acquire write lock on outputs".to_string())
+                    })?
+                    .push(Arc::new(Box::new(x)));
+                Ok(tmp)
+            }
+
+            Err(x) => Err(x),
+        }
     }
 
     pub fn output(&mut self, info: OutputInfo) -> Result<ObsOutputRef, ObsError> {
@@ -325,7 +370,7 @@ impl ObsContext {
                     .map_err(|_| {
                         ObsError::LockError("Failed to acquire write lock on outputs".to_string())
                     })?
-                    .push(x);
+                    .push(Arc::new(Box::new(x)));
                 Ok(tmp)
             }
 
@@ -368,10 +413,70 @@ impl ObsContext {
     }
 
     /// This function is used internally to create displays.
+    // TODO: MacOS support?
     fn inner_display_fn(
         &mut self,
         data: ObsDisplayCreationData,
     ) -> Result<ObsDisplayRef, ObsError> {
+        #[cfg(target_os = "linux")]
+        {
+            // We'll need to check if a custom display was provided because libobs will crash if the display didn't create the window the user is giving us
+            // X11 allows having a separate display however.
+            let nix_display = self
+                .startup_info
+                .read()
+                .map_err(|_| {
+                    ObsError::LockError("Failed to acquire read lock on startup info".to_string())
+                })?
+                .nix_display
+                .clone();
+
+            let is_wayland_handle = data.window_handle.is_wayland;
+            if is_wayland_handle && nix_display.is_none() {
+                return Err(ObsError::DisplayCreationError(
+                    "Wayland window handle provided but no NixDisplay was set in StartupInfo."
+                        .to_string(),
+                ));
+            }
+
+            if let Some(nix_display) = &nix_display {
+                if is_wayland_handle {
+                    match nix_display {
+                        crate::utils::NixDisplay::X11(_display) => {
+                            return Err(ObsError::DisplayCreationError(
+                                "Provided NixDisplay is X11, but the window handle is Wayland."
+                                    .to_string(),
+                            ));
+                        }
+                        crate::utils::NixDisplay::Wayland(display) => {
+                            use crate::utils::linux::wl_proxy_get_display;
+                            if !data.window_handle.is_wayland {
+                                return Err(ObsError::DisplayCreationError(
+                            "Provided window handle is not a Wayland handle, but the NixDisplay is Wayland.".to_string(),
+                        ));
+                            }
+
+                            let surface_handle = data.window_handle.window.0.display;
+                            let display_from_surface = unsafe {
+                                // Safety: The display handle is valid as long as the surface is valid.
+                                wl_proxy_get_display(surface_handle)
+                            };
+                            if let Err(e) = display_from_surface {
+                                log::warn!("Could not get display from surface handle on wayland. Make sure your wayland client is at least version 1.23. Error: {:?}", e);
+                            } else {
+                                let display_from_surface = display_from_surface.unwrap();
+                                if display_from_surface != display.0 {
+                                    return Err(ObsError::DisplayCreationError(
+                            "Provided surface handle's Wayland display does not match the NixDisplay's Wayland display.".to_string(),
+                        ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let display = ObsDisplayRef::new(data, self.runtime.clone())
             .map_err(|e| ObsError::DisplayCreationError(e.to_string()))?;
 
@@ -414,7 +519,10 @@ impl ObsContext {
         Ok(d)
     }
 
-    pub fn get_output(&mut self, name: &str) -> Result<Option<ObsOutputRef>, ObsError> {
+    pub fn get_output(
+        &mut self,
+        name: &str,
+    ) -> Result<Option<Arc<Box<dyn ObsOutputTrait>>>, ObsError> {
         let o = self
             .outputs
             .read()
@@ -429,11 +537,9 @@ impl ObsContext {
     pub fn update_output(&mut self, name: &str, settings: ObsData) -> Result<(), ObsError> {
         match self
             .outputs
-            .write()
-            .map_err(|_| {
-                ObsError::LockError("Failed to acquire write lock on outputs".to_string())
-            })?
-            .iter_mut()
+            .read()
+            .map_err(|_| ObsError::LockError("Failed to acquire read lock on outputs".to_string()))?
+            .iter()
             .find(|x| x.name().to_string().as_str() == name)
         {
             Some(output) => output.update_settings(settings),
@@ -453,15 +559,26 @@ impl ObsContext {
         Ok(f)
     }
 
+    /// Creates a new scene
+    ///
+    /// If the channel is provided, the scene will be set to that output channel.
+    ///
+    /// There are 64 channels that you can assign scenes to,
+    /// which will draw on top of each other in ascending index order
+    /// when a output is rendered.
+    ///
+    /// # Arguments
+    /// * `name` - The name of the scene. This must be unique.
+    /// * `channel` - Optional channel to bind the scene to. If provided, the scene will be set as active for that channel.
+    ///
+    /// # Returns
+    /// A Result containing the new ObsSceneRef or an error
     pub fn scene<T: Into<ObsString> + Send + Sync>(
         &mut self,
         name: T,
+        channel: Option<u32>,
     ) -> Result<ObsSceneRef, ObsError> {
-        let scene = ObsSceneRef::new(
-            name.into(),
-            self.active_scenes.clone(),
-            self.runtime.clone(),
-        )?;
+        let scene = ObsSceneRef::new(name.into(), self.runtime.clone())?;
 
         let tmp = scene.clone();
         self.scenes
@@ -469,6 +586,9 @@ impl ObsContext {
             .map_err(|_| ObsError::LockError("Failed to acquire write lock on scenes".to_string()))?
             .push(scene);
 
+        if let Some(channel) = channel {
+            tmp.set_to_channel(channel)?;
+        }
         Ok(tmp)
     }
 
@@ -480,6 +600,7 @@ impl ObsContext {
             .iter()
             .find(|x| x.name().to_string().as_str() == name)
             .cloned();
+
         Ok(r)
     }
 

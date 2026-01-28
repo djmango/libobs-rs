@@ -1,5 +1,5 @@
-//! For this display method to work, another preview window has to be created in order to create a swapchain
-//! This is because the main window renderer is already handled by other processes
+//! This module is used to create a `OBS display` which you can use to preview the
+//! output of your recording.
 
 mod creation_data;
 mod enums;
@@ -12,10 +12,10 @@ pub use creation_data::*;
 pub use enums::*;
 use libobs::obs_video_info;
 
-use crate::utils::ObsError;
+use crate::unsafe_send::SmartPointerSendable;
+use crate::utils::{ObsDropGuard, ObsError};
 use crate::{impl_obs_drop, run_with_obs, runtime::ObsRuntime, unsafe_send::Sendable};
 use lazy_static::lazy_static;
-use libobs::obs_render_main_texture_src_color_only;
 use std::collections::HashMap;
 use std::mem::MaybeUninit;
 use std::{
@@ -27,15 +27,15 @@ use std::{
 #[allow(dead_code)]
 static ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 #[derive(Debug, Clone)]
-//TODO: This has to be checked again, I'm unsure with pinning and draw callbacks from OBS
-///
-/// This is a wrapper around the obs_display struct and contains direct memory references.
-/// You should ALWAYS use the context to get to this struct, and as said NEVER store it.
+/// You can use the `ObsContext` to create this struct. This struct is stored in the
+/// `ObsContext` itself and the display is removed if every instance of this struct is dropped
+/// (and you have called `remove_display` on the `ObsContext`).
+// Note to developers: This struct does not need to be pinned to Memory any longer.
+// because we are using a id and then using a RwLock (`DISPLAY_POSITIONS`) for managing display data
+// in the render context.
 pub struct ObsDisplayRef {
-    display: Sendable<*mut libobs::obs_display_t>,
     id: usize,
 
-    _guard: Arc<_ObsDisplayDropGuard>,
     _pos_remove_guard: Arc<PosRemoveGuard>,
 
     /// Keep for window, manager is accessed by render thread as well so Arc and RwLock
@@ -47,7 +47,8 @@ pub struct ObsDisplayRef {
         Option<Arc<RwLock<window_manager::windows::WindowsPreviewChildWindowHandler>>>,
 
     /// Stored so the obs context is not dropped while this is alive
-    pub(crate) runtime: ObsRuntime,
+    runtime: ObsRuntime,
+    display: SmartPointerSendable<*mut libobs::obs_display_t>,
 }
 
 lazy_static! {
@@ -67,6 +68,10 @@ impl Drop for PosRemoveGuard {
     }
 }
 
+#[allow(unknown_lints)]
+#[allow(ensure_obs_call_in_runtime)]
+/// # Safety
+/// Always call this function in the graphics/rendering thread of OBS, never call this function directly!
 unsafe extern "C" fn render_display(data: *mut c_void, width: u32, height: u32) {
     let id = data as usize;
     let pos = DISPLAY_POSITIONS
@@ -77,9 +82,16 @@ unsafe extern "C" fn render_display(data: *mut c_void, width: u32, height: u32) 
         .unwrap_or((0, 0));
 
     let mut ovi = MaybeUninit::<obs_video_info>::uninit();
-    libobs::obs_get_video_info(ovi.as_mut_ptr());
+    let was_ok = libobs::obs_get_video_info(ovi.as_mut_ptr());
+    if !was_ok {
+        log::error!("Failed to get video info in display render callback");
+        return;
+    }
 
-    let ovi = unsafe { ovi.assume_init() };
+    let ovi = unsafe {
+        // Safety: was_ok checked that the video info was properly initialized
+        ovi.assume_init()
+    };
 
     libobs::gs_viewport_push();
     libobs::gs_projection_push();
@@ -95,7 +107,7 @@ unsafe extern "C" fn render_display(data: *mut c_void, width: u32, height: u32) 
     libobs::gs_set_viewport(pos.0, pos.1, width as i32, height as i32);
     //draw_backdrop(&s.buffers, ovi.base_width as f32, ovi.base_height as f32);
 
-    obs_render_main_texture_src_color_only();
+    libobs::obs_render_main_texture_src_color_only();
 
     libobs::gs_projection_pop();
     libobs::gs_viewport_pop();
@@ -163,6 +175,7 @@ impl ObsWindowHandle {
     pub fn new_from_x11(runtime: &ObsRuntime, id: u32) -> Result<Self, ObsError> {
         let runtime = runtime.clone();
         let display = run_with_obs!(runtime, (), move || unsafe {
+            // Safety: We are just getting a pointer and we are in the runtime
             Sendable(libobs::obs_get_nix_platform_display())
         })?;
 
@@ -221,15 +234,26 @@ impl ObsDisplayRef {
         let init_data = Sendable(data.build(None));
 
         log::trace!("Creating obs display...");
-        let display = run_with_obs!(runtime, (init_data), move || unsafe {
-            Sendable(libobs::obs_display_create(&init_data.0, background_color))
-        })?;
+        let display = run_with_obs!(runtime, (init_data), move || {
+            let display_ptr = unsafe {
+                // Safety: All pointers are valid because we are keeping them in this scope and because we are cloning init_data into this scope
+                libobs::obs_display_create(&init_data.0 .0, background_color)
+            };
 
-        if display.0.is_null() {
-            return Err(ObsError::DisplayCreationError(
-                "OBS failed to create display".to_string(),
-            ));
-        }
+            if display_ptr.is_null() {
+                Err(ObsError::NullPointer(None))
+            } else {
+                Ok(Sendable(display_ptr))
+            }
+        })??;
+
+        let display = SmartPointerSendable::new(
+            display.0,
+            Arc::new(_ObsDisplayDropGuard {
+                display,
+                runtime: runtime.clone(),
+            }),
+        );
 
         #[cfg(windows)]
         if let Some(handler) = &mut child_handler {
@@ -250,10 +274,6 @@ impl ObsDisplayRef {
 
         let instance = Self {
             display: display.clone(),
-            _guard: Arc::new(_ObsDisplayDropGuard {
-                display,
-                runtime: runtime.clone(),
-            }),
             id,
             runtime: runtime.clone(),
             _pos_remove_guard: Arc::new(PosRemoveGuard { id }),
@@ -264,13 +284,16 @@ impl ObsDisplayRef {
 
         log::trace!("Adding draw callback with display {:?}", instance.display);
 
-        let display_ptr = instance.display.clone();
-        run_with_obs!(runtime, (display_ptr), move || unsafe {
-            libobs::obs_display_add_draw_callback(
-                display_ptr,
-                Some(render_display),
-                id as *mut c_void,
-            );
+        let display_ptr = instance.as_ptr();
+        run_with_obs!(runtime, (display_ptr), move || {
+            unsafe {
+                // Safety: The pointer is valid because we are using a smart pointer
+                libobs::obs_display_add_draw_callback(
+                    display_ptr.get_ptr(),
+                    Some(render_display),
+                    id as *mut c_void,
+                );
+            }
         })?;
 
         Ok(instance)
@@ -281,22 +304,32 @@ impl ObsDisplayRef {
     }
 
     pub fn update_color_space(&self) -> Result<(), ObsError> {
-        let display_ptr = self.display.clone();
-        run_with_obs!(self.runtime, (display_ptr), move || unsafe {
-            libobs::obs_display_update_color_space(display_ptr)
+        let display_ptr = self.as_ptr();
+        run_with_obs!(self.runtime, (display_ptr), move || {
+            unsafe {
+                // Safety: The pointer is valid because we are using a smart pointer
+                libobs::obs_display_update_color_space(display_ptr.get_ptr())
+            }
         })
+    }
+
+    pub fn as_ptr(&self) -> SmartPointerSendable<*mut libobs::obs_display_t> {
+        self.display.clone()
     }
 }
 
 #[derive(Debug)]
 struct _ObsDisplayDropGuard {
     display: Sendable<*mut libobs::obs_display_t>,
-    pub(crate) runtime: ObsRuntime,
+    runtime: ObsRuntime,
 }
 
-impl_obs_drop!(_ObsDisplayDropGuard, (display), move || unsafe {
-    log::trace!("Removing callback of display {:?}...", display);
-    libobs::obs_display_remove_draw_callback(display, Some(render_display), std::ptr::null_mut());
+impl ObsDropGuard for _ObsDisplayDropGuard {}
 
-    libobs::obs_display_destroy(display);
+impl_obs_drop!(_ObsDisplayDropGuard, (display), move || unsafe {
+    // Safety: The pointer is valid as long as we are in the runtime and the guard is alive.
+    log::trace!("Removing callback of display {:?}...", display);
+    libobs::obs_display_remove_draw_callback(display.0, Some(render_display), std::ptr::null_mut());
+
+    libobs::obs_display_destroy(display.0);
 });

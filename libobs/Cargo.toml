@@ -1,6 +1,6 @@
 [package]
 name = "libobs"
-version = "4.0.3+32.0.2"
+version = "5.0.1+32.0.4"
 description = "LibOBS bindings for Rust"
 repository = "https://github.com/libobs-rs/libobs-rs"
 documentation = "https://libobs-rs.github.io/libobs-rs/libobs/"
@@ -21,7 +21,7 @@ edition = "2021"
 build = "build.rs"
 
 [build-dependencies]
-bindgen = "0.72.1"
+bindgen = "0.72"
 pkg-config = "0.3"
 
 [features]
@@ -30,10 +30,11 @@ generate_bindings = []
 include_win_bindings = ["generate_bindings"]
 
 [dev-dependencies]
-vsprintf = "2"
+vsprintf = { workspace = true }
 
 [package.metadata.docs.rs]
 targets = ["x86_64-pc-windows-msvc"]
 
 [lints]
 workspace = true
+

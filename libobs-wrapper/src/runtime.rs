@@ -34,7 +34,10 @@
 //! }
 //! ```
 
+#[cfg(feature = "enable_runtime")]
+use std::any;
 use std::ffi::CStr;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::{ptr, thread};
 
@@ -42,6 +45,8 @@ use crate::context::ObsContext;
 use crate::crash_handler::main_crash_handler;
 use crate::enums::{ObsLogLevel, ObsResetVideoStatus};
 use crate::logger::{extern_log_callback, internal_log_global, LOGGER};
+#[cfg(target_os = "linux")]
+use crate::run_with_obs;
 use crate::utils::initialization::{platform_specific_setup, PlatformSpecificGuard};
 use crate::utils::{ObsError, ObsModules, ObsString};
 use crate::{context::OBS_THREAD_ID, utils::StartupInfo};
@@ -61,10 +66,10 @@ use std::thread::JoinHandle;
 /// Command type for operations to perform on the OBS thread
 #[cfg(feature = "enable_runtime")]
 enum ObsCommand {
-    /// Execute a function on the OBS thread and send result back
+    /// Execute a function on the OBS thread and send result back if sender is provided
     Execute(
-        Box<dyn FnOnce() -> Box<dyn std::any::Any + Send> + Send>,
-        oneshot::Sender<Box<dyn std::any::Any + Send>>,
+        Box<dyn FnOnce() -> Box<dyn any::Any + Send> + Send>,
+        Option<oneshot::Sender<Box<dyn any::Any + Send>>>,
     ),
     /// Signal the OBS thread to terminate
     Terminate,
@@ -91,10 +96,11 @@ pub struct ObsRuntime {
     command_sender: Arc<Sender<ObsCommand>>,
     #[cfg(feature = "enable_runtime")]
     queued_commands: Arc<AtomicUsize>,
+    thread_id: std::thread::ThreadId,
     _guard: Arc<_ObsRuntimeGuard>,
 
     #[cfg(not(feature = "enable_runtime"))]
-    _platform_specific: Option<Arc<PlatformSpecificGuard>>,
+    _platform_specific: Option<Rc<PlatformSpecificGuard>>,
 }
 
 impl ObsRuntime {
@@ -176,9 +182,10 @@ impl ObsRuntime {
     /// Creates the OBS thread and performs core initialization.
     #[cfg(not(feature = "enable_runtime"))]
     fn init(info: StartupInfo) -> Result<(ObsRuntime, ObsModules, StartupInfo), ObsError> {
-        let (startup, mut modules, platform_specific) = Self::initialize_inner(info)?;
+        let (startup, mut modules, platform_specific) = unsafe { Self::initialize_inner(info)? };
 
         let runtime = Self {
+            thread_id: thread::current().id(),
             _guard: Arc::new(_ObsRuntimeGuard {}),
             _platform_specific: platform_specific,
         };
@@ -192,47 +199,62 @@ impl ObsRuntime {
     /// Creates the OBS thread and performs core initialization.
     #[cfg(feature = "enable_runtime")]
     fn init(info: StartupInfo) -> Result<(ObsRuntime, ObsModules, StartupInfo), ObsError> {
+        static RUNTIME_THREAD_NAME: &str = "libobs-wrapper-obs-runtime";
+
         let (command_sender, command_receiver) = channel();
         let (init_tx, init_rx) = oneshot::channel();
         let queued_commands = Arc::new(AtomicUsize::new(0));
 
         let queued_commands_clone = queued_commands.clone();
-        let handle = std::thread::spawn(move || {
-            log::trace!("Starting OBS thread");
+        let handle = std::thread::Builder::new()
+            .name(RUNTIME_THREAD_NAME.to_string())
+            .spawn(move || {
+                log::trace!("Starting OBS thread");
 
-            let res = Self::initialize_inner(info);
+                let res = unsafe {
+                    // Safety: This is safe to can because we are in the dedicated OBS thread.
+                    Self::initialize_inner(info)
+                };
 
-            match res {
-                Ok((info, modules, _platform_specific)) => {
-                    log::trace!("OBS context initialized successfully");
-                    let e = init_tx.send(Ok((Sendable(modules), info)));
-                    if let Err(err) = e {
-                        log::error!("Failed to send initialization signal: {:?}", err);
-                    }
+                match res {
+                    Ok((info, modules, _platform_specific_guard)) => {
+                        log::trace!("OBS context initialized successfully");
 
-                    // Process commands until termination
-                    while let Ok(command) = command_receiver.recv() {
-                        match command {
-                            ObsCommand::Execute(func, result_sender) => {
-                                let result = func();
-                                let _ = result_sender.send(result);
-                                queued_commands_clone.fetch_sub(1, Ordering::SeqCst);
+                        let e = init_tx.send(Ok((Sendable(modules), info)));
+                        if let Err(err) = e {
+                            log::error!("Failed to send initialization signal: {:?}", err);
+                        }
+
+                        // Process commands until termination
+                        while let Ok(command) = command_receiver.recv() {
+                            match command {
+                                ObsCommand::Execute(func, result_sender) => {
+                                    let result = func();
+                                    if let Some(result_sender) = result_sender {
+                                        let _ = result_sender.send(result);
+                                    }
+
+                                    queued_commands_clone.fetch_sub(1, Ordering::SeqCst);
+                                }
+                                ObsCommand::Terminate => break,
                             }
-                            ObsCommand::Terminate => break,
+                        }
+
+                        let r = unsafe {
+                            // Safety: We are in the OBS thread, so it's safe to call shutdown here.
+                            Self::shutdown_inner()
+                        };
+                        if let Err(err) = r {
+                            log::error!("Failed to shut down OBS context: {:?}", err);
                         }
                     }
-
-                    let r = Self::shutdown_inner();
-                    if let Err(err) = r {
-                        log::error!("Failed to shut down OBS context: {:?}", err);
+                    Err(err) => {
+                        log::error!("Failed to initialize OBS context: {:?}", err);
+                        let _ = init_tx.send(Err(err));
                     }
                 }
-                Err(err) => {
-                    log::error!("Failed to initialize OBS context: {:?}", err);
-                    let _ = init_tx.send(Err(err));
-                }
-            }
-        });
+            })
+            .map_err(|_e| ObsError::ThreadFailure)?;
 
         log::trace!("Waiting for OBS thread to initialize");
         // Wait for initialization to complete
@@ -240,10 +262,12 @@ impl ObsRuntime {
             ObsError::RuntimeChannelError(format!("Failed to receive initialization result: {:?}", e))
         })??;
 
+        let thread_id = handle.thread().id();
         let handle = Arc::new(Mutex::new(Some(handle)));
         let command_sender = Arc::new(command_sender);
         let runtime = Self {
             command_sender: command_sender.clone(),
+            thread_id,
             queued_commands,
             _guard: Arc::new(_ObsRuntimeGuard {
                 handle,
@@ -255,10 +279,7 @@ impl ObsRuntime {
         Ok((runtime, m.0, info))
     }
 
-    /// Executes an operation on the OBS thread without returning a value
-    ///
-    /// This is a convenience wrapper around `run_with_obs_result` for operations
-    /// that don't need to return a value.
+    /// Executes an operation on the OBS thread *without* blocking. This method *will not wait* for the result.
     ///
     /// # Parameters
     ///
@@ -266,7 +287,7 @@ impl ObsRuntime {
     ///
     /// # Returns
     ///
-    /// A `Result` indicating success or failure
+    /// A `Result` indicating whether the operation was successfully dispatched
     ///
     /// # Examples
     ///
@@ -280,18 +301,63 @@ impl ObsRuntime {
     ///     }).await.unwrap();
     /// }
     /// ```
-    pub fn run_with_obs<F>(&self, operation: F) -> Result<(), ObsError>
+    #[cfg(feature = "enable_runtime")]
+    pub fn run_with_obs_no_block<F>(&self, operation: F) -> Result<(), ObsError>
     where
         F: FnOnce() + Send + 'static,
     {
-        self.run_with_obs_result(move || {
+        let is_within_runtime = std::thread::current().id() == self.thread_id;
+
+        if is_within_runtime {
             operation();
-        })?;
+
+            return Ok(());
+        }
+
+        let val = self.queued_commands.fetch_add(1, Ordering::SeqCst);
+        if val > 50 {
+            log::warn!("More than 50 queued commands. Try to batch them together.");
+        }
+
+        let wrapper = move || -> Box<dyn std::any::Any + Send> {
+            operation();
+            Box::new(())
+        };
+
+        self.command_sender
+            .send(ObsCommand::Execute(Box::new(wrapper), None))
+            .map_err(|_| {
+                ObsError::RuntimeChannelError("Failed to send command to OBS thread".to_string())
+            })?;
 
         Ok(())
     }
 
-    /// Executes an operation on the OBS thread and returns a result
+    /// Because you have the `enable_runtime` feature disabled, this is a no-op function and will still block. This is just so the run_with_obs macro works.
+    #[cfg(not(feature = "enable_runtime"))]
+    pub fn run_with_obs_no_block<F>(&self, operation: F) -> Result<(), ObsError>
+    where
+        F: FnOnce() + 'static,
+    {
+        // We are on runtime, so it will block either way
+        self.run_with_obs_result(operation)
+    }
+
+    /// No-Op function, as you have the runtime disabled. This is just so the run_with_obs macro still works
+    #[cfg(not(feature = "enable_runtime"))]
+    pub fn run_with_obs_result<F, T>(&self, operation: F) -> Result<T, ObsError>
+    where
+        F: FnOnce() -> T,
+    {
+        let is_within_runtime = std::thread::current().id() == self.thread_id;
+        if !is_within_runtime {
+            return Err(ObsError::RuntimeOutsideThread);
+        }
+
+        Ok(operation())
+    }
+
+    /// Executes an operation on the OBS thread, waits for the call to finish and returns a result
     ///
     /// This method dispatches a task to the OBS thread and blocks and waits for the result.
     ///
@@ -313,57 +379,52 @@ impl ObsRuntime {
     ///         // This code runs on the OBS thread
     ///         unsafe { libobs::obs_get_version_string() }
     ///     }).await.unwrap();
-    ///     
+    ///
     ///     println!("OBS Version: {:?}", version);
     /// }
     /// ```
+    #[cfg(feature = "enable_runtime")]
     pub fn run_with_obs_result<F, T>(&self, operation: F) -> Result<T, ObsError>
     where
         F: FnOnce() -> T + Send + 'static,
         T: Send + 'static,
     {
-        #[cfg(feature = "enable_runtime")]
-        {
-            let (tx, rx) = oneshot::channel();
-
-            // Create a wrapper closure that boxes the result as Any
-            let wrapper = move || -> Box<dyn std::any::Any + Send> {
-                let result = operation();
-                Box::new(result)
-            };
-
-            let val = self.queued_commands.fetch_add(1, Ordering::SeqCst);
-            if val > 50 {
-                log::warn!("More than 50 queued commands. Try to batch them together.");
-            }
-
-            self.command_sender
-                .send(ObsCommand::Execute(Box::new(wrapper), tx))
-                .map_err(|_| {
-                    ObsError::RuntimeChannelError(
-                        "Failed to send command to OBS thread".to_string(),
-                    )
-                })?;
-
-            let result = rx.recv().map_err(|_| {
-                ObsError::RuntimeChannelError("OBS thread dropped the response channel".to_string())
-            })?;
-
-            // Downcast the Any type back to T
-            let res = result.downcast::<T>().map(|boxed| *boxed).map_err(|_| {
-                ObsError::RuntimeChannelError(
-                    "Failed to downcast result to the expected type".to_string(),
-                )
-            })?;
-
-            Ok(res)
-        }
-
-        #[cfg(not(feature = "enable_runtime"))]
-        {
+        let is_within_runtime = std::thread::current().id() == self.thread_id;
+        if is_within_runtime {
             let result = operation();
-            Ok(result)
+            return Ok(result);
         }
+        let (tx, rx) = oneshot::channel();
+
+        // Create a wrapper closure that boxes the result as Any
+        let wrapper = move || -> Box<dyn std::any::Any + Send> {
+            let result = operation();
+            Box::new(result)
+        };
+
+        let val = self.queued_commands.fetch_add(1, Ordering::SeqCst);
+        if val > 50 {
+            log::warn!("More than 50 queued commands. Try to batch them together.");
+        }
+
+        self.command_sender
+            .send(ObsCommand::Execute(Box::new(wrapper), Some(tx)))
+            .map_err(|_| {
+                ObsError::RuntimeChannelError("Failed to send command to OBS thread".to_string())
+            })?;
+
+        let result = rx.recv().map_err(|_| {
+            ObsError::RuntimeChannelError("OBS thread dropped the response channel".to_string())
+        })?;
+
+        // Downcast the Any type back to T
+        let res = result.downcast::<T>().map(|boxed| *boxed).map_err(|_| {
+            ObsError::RuntimeChannelError(
+                "Failed to downcast result to the expected type".to_string(),
+            )
+        })?;
+
+        Ok(res)
     }
 
     /// Initializes the libobs context and prepares it for recording.
@@ -380,9 +441,14 @@ impl ObsRuntime {
     /// # Returns
     ///
     /// A `Result` containing the updated startup info and loaded modules, or an error
-    fn initialize_inner(
+    ///
+    /// # Safety
+    /// This function must be called within the OBS runtime context to ensure thread safety.
+    #[allow(unknown_lints)]
+    #[allow(ensure_obs_call_in_runtime)]
+    unsafe fn initialize_inner(
         mut info: StartupInfo,
-    ) -> Result<(StartupInfo, ObsModules, Option<Arc<PlatformSpecificGuard>>), ObsError> {
+    ) -> Result<(StartupInfo, ObsModules, Option<Rc<PlatformSpecificGuard>>), ObsError> {
         // Checks that there are no other threads
         // using libobs using a static Mutex.
         //
@@ -415,22 +481,22 @@ impl ObsRuntime {
 
         #[cfg(windows)]
         unsafe {
+            // Safety: We are in the OBS thread, so it's safe to call this here.
             libobs::obs_init_win32_crash_handler();
         }
 
         // Set logger, load debug privileges and crash handler
         unsafe {
+            // Safety: We are in the OBS thread, so it's safe to call this here.
             libobs::base_set_crash_handler(Some(main_crash_handler), std::ptr::null_mut());
         }
 
-        #[cfg(target_os = "linux")]
-        let native = platform_specific_setup(info.nix_display.clone())?;
-        #[cfg(target_os = "macos")]
-        let native = platform_specific_setup()?;
-        #[cfg(windows)]
-        let native = platform_specific_setup(None)?;
-
+        let native = unsafe {
+            // Safety: Linux: We are in the OBS thread and the nix_display can only be set
+            platform_specific_setup(info.nix_display.clone())?
+        };
         unsafe {
+            // Safety: We are in the OBS thread, so it's safe to call this here.
             libobs::base_set_log_handler(Some(extern_log_callback), std::ptr::null_mut());
         }
 
@@ -443,8 +509,10 @@ impl ObsRuntime {
         // libobs for logging purposes, making it
         // unnecessary to support other languages.
         let locale_str = ObsString::new("en-US");
-        let startup_status =
-            unsafe { libobs::obs_startup(locale_str.as_ptr().0, ptr::null(), ptr::null_mut()) };
+        let startup_status = unsafe {
+            // Safety: All pointers are valid here.
+            libobs::obs_startup(locale_str.as_ptr().0, ptr::null(), ptr::null_mut())
+        };
 
         let version = unsafe { libobs::obs_get_version_string() };
         let version_cstr = unsafe { CStr::from_ptr(version) };
@@ -481,13 +549,17 @@ impl ObsRuntime {
             return Err(ObsError::Failure);
         }
 
-        let mut obs_modules = ObsModules::add_paths(&info.startup_paths);
+        let mut obs_modules = unsafe {
+            // Safety: This is running in the OBS thread, so it's safe to call this here.
+            ObsModules::add_paths(&info.startup_paths)
+        };
 
         // Note that audio is meant to only be reset
         // once. See the link below for information.
         //
         // https://docs.obsproject.com/frontends
         unsafe {
+            // Safety: The audio_info pointer is valid here.
             libobs::obs_reset_audio2(info.obs_audio_info.as_ptr().0);
         }
 
@@ -498,6 +570,7 @@ impl ObsRuntime {
         // and also because there is no need to free
         // anything tied to the OBS context.
         let reset_video_status = num_traits::FromPrimitive::from_i32(unsafe {
+            // Safety: The video_info pointer is valid here.
             libobs::obs_reset_video(info.obs_video_info.as_ptr())
         });
 
@@ -512,10 +585,13 @@ impl ObsRuntime {
 
         let sdr_info = info.obs_video_info.get_sdr_info();
         unsafe {
+            // Safety: These are just numbers, so it's safe to call this here. Also graphics are initialized, so we can call this.
             libobs::obs_set_video_levels(sdr_info.sdr_white_level, sdr_info.hdr_nominal_peak_level);
         }
 
-        obs_modules.load_modules();
+        unsafe {
+            obs_modules.load_modules();
+        }
 
         internal_log_global(
             ObsLogLevel::Info,
@@ -532,19 +608,29 @@ impl ObsRuntime {
     /// - Calling `obs_shutdown` to clean up OBS resources
     /// - Removing log and crash handlers
     /// - Checking for memory leaks
-    fn shutdown_inner() -> Result<(), ObsError> {
+    ///
+    /// Safety: Always run this in the OBS runtime context.
+    #[allow(unknown_lints)]
+    #[allow(ensure_obs_call_in_runtime)]
+    unsafe fn shutdown_inner() -> Result<(), ObsError> {
         // Clean up sources
         for i in 0..libobs::MAX_CHANNELS {
             unsafe { libobs::obs_set_output_source(i, ptr::null_mut()) };
         }
 
-        unsafe { libobs::obs_shutdown() }
+        unsafe {
+            // Safety: We are in the OBS thread, so it's safe to call this here. Also by this time, we _should_ have dropped all OBS resources.
+            libobs::obs_shutdown()
+        }
 
         let r = LOGGER.lock();
         match r {
             Ok(mut logger) => {
                 logger.log(ObsLogLevel::Info, "OBS context shutdown.".to_string());
-                let allocs = unsafe { libobs::bnum_allocs() };
+                let allocs = unsafe {
+                    // Safety: Can always be called because it just returns a number.
+                    libobs::bnum_allocs()
+                };
 
                 // Some memory leaks are expected here because OBS does not free array elements of the obs_data_path when calling obs_add_data_path
                 // even when obs_remove_data_path is called. This is a bug in OBS.
@@ -584,6 +670,7 @@ impl ObsRuntime {
         }
 
         unsafe {
+            // Safety: We are in the OBS thread, so it's safe to call this here.
             // Clean up log and crash handler
             libobs::base_set_crash_handler(None, std::ptr::null_mut());
             libobs::base_set_log_handler(None, std::ptr::null_mut());
@@ -593,6 +680,26 @@ impl ObsRuntime {
 
         *mutex_value = None;
         Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn get_platform(&self) -> Result<crate::utils::initialization::PlatformType, ObsError> {
+        run_with_obs!(self, || {
+            let raw_platform = unsafe {
+                // Safety: This is safe to call as long as OBS is initialized.
+                libobs::obs_get_nix_platform()
+            };
+
+            match raw_platform {
+                libobs::obs_nix_platform_type_OBS_NIX_PLATFORM_X11_EGL => {
+                    crate::utils::initialization::PlatformType::X11
+                }
+                libobs::obs_nix_platform_type_OBS_NIX_PLATFORM_WAYLAND => {
+                    crate::utils::initialization::PlatformType::Wayland
+                }
+                _ => crate::utils::initialization::PlatformType::Invalid,
+            }
+        })
     }
 }
 
@@ -660,7 +767,7 @@ impl Drop for _ObsRuntimeGuard {
     /// Ensures the OBS thread is properly shut down when the runtime is dropped
     fn drop(&mut self) {
         log::trace!("Dropping ObsRuntime and shutting down OBS thread");
-        let r = ObsRuntime::shutdown_inner();
+        let r = unsafe { ObsRuntime::shutdown_inner() };
 
         if thread::panicking() {
             return;

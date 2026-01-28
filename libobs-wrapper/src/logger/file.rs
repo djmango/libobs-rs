@@ -12,6 +12,8 @@ pub struct FileLogger {
 }
 
 impl FileLogger {
+    /// Creates a new `FileLogger`, which writes to a log file formatted by the current time.
+    /// This does not implement any rotary logging or similar, so there'll be a log file for every time your ObsContext is being started up.
     pub fn from_dir(dir: &Path) -> Result<Self, ObsError> {
         let current_local = Local::now();
         let custom_format = current_local.format("%Y-%m-%d-%H-%M-%S");
@@ -22,6 +24,7 @@ impl FileLogger {
         })
     }
 
+    /// Creates a new `FileLogger` which will pipe the libobs output directly to the file given.
     pub fn from_file(file: &Path) -> Result<Self, ObsError> {
         Ok(Self {
             file: File::create(file).map_err(|e| ObsError::IoError(e.to_string()))?,

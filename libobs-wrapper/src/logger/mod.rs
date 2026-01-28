@@ -1,3 +1,6 @@
+//! This module is used to provide a logger trait, which can be used to implement custom logging
+//! for the libobs console output.
+
 mod console;
 mod file;
 pub use console::ConsoleLogger;
@@ -13,9 +16,11 @@ use crate::enums::ObsLogLevel;
 
 lazy_static! {
     /// We are using this as global variable because there can only be one obs context
-    pub static ref LOGGER: Mutex<Box<dyn ObsLogger>> = Mutex::new(Box::new(ConsoleLogger::new()));
+    pub(crate) static ref LOGGER: Mutex<Box<dyn ObsLogger>> = Mutex::new(Box::new(ConsoleLogger::new()));
 }
 
+/// # Safety
+/// This function is unsafe because it is called from C code.
 pub(crate) unsafe extern "C" fn extern_log_callback<V>(
     log_level: i32,
     msg: *const i8,

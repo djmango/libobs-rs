@@ -1,13 +1,14 @@
-use std::sync::{Arc, RwLock};
-use std::{ffi::CStr, ptr};
-
-use getters0::Getters;
 use libobs::obs_output;
+use std::collections::HashMap;
+use std::ptr;
+use std::sync::{Arc, RwLock};
 
-use crate::enums::ObsOutputStopSignal;
+use crate::data::object::{inner_fn_update_settings, ObsObjectTrait, ObsObjectTraitPrivate};
+use crate::data::ImmutableObsData;
+use crate::data::ObsDataPointers;
 use crate::runtime::ObsRuntime;
-use crate::unsafe_send::Sendable;
-use crate::utils::{AudioEncoderInfo, OutputInfo, VideoEncoderInfo};
+use crate::unsafe_send::{Sendable, SmartPointerSendable};
+use crate::utils::{ObsDropGuard, OutputInfo};
 use crate::{impl_obs_drop, impl_signal_manager, run_with_obs};
 
 use crate::{
@@ -16,6 +17,10 @@ use crate::{
 };
 
 use super::ObsData;
+
+pub(crate) mod macros;
+mod traits;
+pub use traits::*;
 
 mod replay_buffer;
 pub use replay_buffer::*;
@@ -26,12 +31,14 @@ struct _ObsOutputDropGuard {
     runtime: ObsRuntime,
 }
 
+impl ObsDropGuard for _ObsOutputDropGuard {}
+
 impl_obs_drop!(_ObsOutputDropGuard, (output), move || unsafe {
-    libobs::obs_output_release(output);
+    // Safety: We are in the runtime and drop guards are always constructed from valid output pointers. Also this guard should be in an Arc, so no double free should happen.
+    libobs::obs_output_release(output.0);
 });
 
-#[derive(Debug, Getters, Clone)]
-#[skip_new]
+#[derive(Debug, Clone)]
 /// A reference to an OBS output.
 ///
 /// This struct represents an output in OBS, which is responsible for
@@ -42,85 +49,115 @@ impl_obs_drop!(_ObsOutputDropGuard, (output), move || unsafe {
 ///
 /// The output is associated with video and audio encoders that convert
 /// raw media to the required format before sending/storing.
+///
+/// If encoders are attached to this struct, they are stored internally, so they will not get removed
+/// As of right now, there is no way to remove the encoders again, rather you'll need to replace them with another encoder or drop this struct and
+/// recreate a output.
 pub struct ObsOutputRef {
     /// Disconnect signals first
-    pub(crate) signal_manager: Arc<ObsOutputSignals>,
+    signal_manager: Arc<ObsOutputSignals>,
 
     /// Settings for the output
-    pub(crate) settings: Arc<RwLock<Option<ObsData>>>,
+    settings: Arc<RwLock<ImmutableObsData>>,
 
     /// Hotkey configuration data for the output
-    pub(crate) hotkey_data: Arc<RwLock<Option<ObsData>>>,
+    hotkey_data: Arc<RwLock<ImmutableObsData>>,
 
     /// Video encoders attached to this output
-    #[get_mut]
-    pub(crate) curr_video_encoder: Arc<RwLock<Option<Arc<ObsVideoEncoder>>>>,
+    curr_video_encoder: Arc<RwLock<Option<Arc<ObsVideoEncoder>>>>,
 
     /// Audio encoders attached to this output
-    #[get_mut]
-    pub(crate) audio_encoders: Arc<RwLock<Option<Arc<ObsAudioEncoder>>>>,
-
-    /// Pointer to the underlying OBS output
-    #[skip_getter]
-    pub(crate) output: Sendable<*mut obs_output>,
+    audio_encoders: Arc<RwLock<HashMap<usize, Arc<ObsAudioEncoder>>>>,
 
     /// The type identifier of this output
-    pub(crate) id: ObsString,
+    id: ObsString,
 
     /// The unique name of this output
-    pub(crate) name: ObsString,
+    name: ObsString,
 
-    #[skip_getter]
-    pub(crate) runtime: ObsRuntime,
+    runtime: ObsRuntime,
 
-    /// RAII guard that ensures proper cleanup when the output is dropped
-    #[skip_getter]
-    _drop_guard: Arc<_ObsOutputDropGuard>,
+    /// Pointer to the underlying OBS output
+    output: SmartPointerSendable<*mut obs_output>,
 }
 
-impl ObsOutputRef {
-    /// Creates a new output reference from the given output info and runtime.
-    ///
-    /// # Arguments
-    /// * `output` - The output information containing ID, name, and optional settings
-    /// * `runtime` - The OBS runtime instance
-    ///
-    /// # Returns
-    /// A Result containing the new ObsOutputRef or an error
-    pub(crate) fn new(output: OutputInfo, runtime: ObsRuntime) -> Result<Self, ObsError> {
-        let (output, id, name, settings, hotkey_data) = runtime.run_with_obs_result(|| {
-            let OutputInfo {
-                id,
-                name,
-                settings,
-                hotkey_data,
-            } = output;
+impl ObsOutputTraitSealed for ObsOutputRef {
+    fn new(output: OutputInfo, runtime: ObsRuntime) -> Result<Self, ObsError> {
+        let OutputInfo {
+            id,
+            name,
+            settings,
+            hotkey_data,
+        } = output;
 
-            let settings_ptr = match settings.as_ref() {
-                Some(x) => x.as_ptr(),
-                None => Sendable(ptr::null_mut()),
+        let settings_ptr = settings.as_ref().map(|x| x.as_ptr());
+        let hotkey_data_ptr = hotkey_data.as_ref().map(|x| x.as_ptr());
+
+        let output = run_with_obs!(
+            runtime,
+            (id, name, settings_ptr, hotkey_data_ptr),
+            move || {
+                let settings_raw_ptr = match settings_ptr {
+                    Some(s) => s.get_ptr(),
+                    None => ptr::null_mut(),
+                };
+
+                let hotkey_data_raw_ptr = match hotkey_data_ptr {
+                    Some(h) => h.get_ptr(),
+                    None => ptr::null_mut(),
+                };
+
+                let id_ptr = id.as_ptr().0;
+                let name_ptr = name.as_ptr().0;
+
+                let output = unsafe {
+                    // Safety: All pointers are valid because we are keeping them in this scope and because we are using smart pointers for ObsData
+                    libobs::obs_output_create(
+                        id_ptr,
+                        name_ptr,
+                        settings_raw_ptr,
+                        hotkey_data_raw_ptr,
+                    )
+                };
+
+                if output.is_null() {
+                    return Err(ObsError::NullPointer(None));
+                }
+
+                Ok(Sendable(output))
+            }
+        )??;
+
+        let output = SmartPointerSendable::new(
+            output.0,
+            Arc::new(_ObsOutputDropGuard {
+                output: output.clone(),
+                runtime: runtime.clone(),
+            }),
+        );
+
+        // We are getting the settings from OBS because OBS will have updated it with default values.
+        let new_settings_ptr = run_with_obs!(runtime, (output), move || {
+            let new_settings_ptr = unsafe {
+                // Safety: At this point, the output can't be released because we are using a SmartPointer.
+                libobs::obs_output_get_settings(output.get_ptr())
             };
 
-            let hotkey_data_ptr = match hotkey_data.as_ref() {
-                Some(x) => x.as_ptr(),
-                None => Sendable(ptr::null_mut()),
-            };
+            if new_settings_ptr.is_null() {
+                return Err(ObsError::NullPointer(None));
+            }
 
-            let output = unsafe {
-                libobs::obs_output_create(
-                    id.as_ptr().0,
-                    name.as_ptr().0,
-                    settings_ptr.0,
-                    hotkey_data_ptr.0,
-                )
-            };
+            Ok(Sendable(new_settings_ptr))
+        })??;
 
-            (Sendable(output), id, name, settings, hotkey_data)
-        })?;
+        let settings = ImmutableObsData::from_raw_pointer(new_settings_ptr, runtime.clone());
 
-        if output.0.is_null() {
-            return Err(ObsError::NullPointer);
-        }
+        // We are creating the hotkey data here because even it is null, OBS would create it nonetheless.
+        // https://github.com/obsproject/obs-studio/blob/d97e5ad820abcccf826faf897df4c7f511857cd4/libobs/obs.c#L2629
+        let hotkey_data = match hotkey_data {
+            Some(h) => h,
+            None => ImmutableObsData::new(&runtime)?,
+        };
 
         let signal_manager = ObsOutputSignals::new(&output, runtime.clone())?;
         Ok(Self {
@@ -128,343 +165,102 @@ impl ObsOutputRef {
             hotkey_data: Arc::new(RwLock::new(hotkey_data)),
 
             curr_video_encoder: Arc::new(RwLock::new(None)),
-            audio_encoders: Arc::new(RwLock::new(None)),
+            audio_encoders: Arc::new(RwLock::new(HashMap::new())),
 
             output: output.clone(),
             id,
             name,
 
-            _drop_guard: Arc::new(_ObsOutputDropGuard {
-                output,
-                runtime: runtime.clone(),
-            }),
-
             runtime,
             signal_manager: Arc::new(signal_manager),
         })
     }
+}
 
-    /// Returns the current video encoder attached to this output, if any.
-    pub fn get_current_video_encoder(&self) -> Result<Option<Arc<ObsVideoEncoder>>, ObsError> {
-        let curr = self
-            .curr_video_encoder
-            .read()
-            .map_err(|e| ObsError::LockError(e.to_string()))?;
-
-        Ok(curr.clone())
-    }
-
-    /// Creates and attaches a new audio encoder to this output.
-    ///
-    /// This method creates a new audio encoder using the provided information
-    ///  and attaches it to this output at the specified mixer index.
-    ///
-    /// # Arguments
-    /// * `info` - Information for creating the audio encoder
-    /// * `mixer_idx` - The mixer index to use (typically 0 for primary audio)
-    ///
-    /// # Returns
-    /// A Result containing an Arc-wrapped ObsAudioEncoder or an error
-    pub fn create_and_set_video_encoder(
-        &mut self,
-        info: VideoEncoderInfo,
-    ) -> Result<Arc<ObsVideoEncoder>, ObsError> {
-        // Fail early before creating the encoder if the output is active
-        if self.is_active()? {
-            return Err(ObsError::OutputAlreadyActive);
-        }
-
-        let video_enc = ObsVideoEncoder::new_from_info(info, self.runtime.clone())?;
-
-        self.set_video_encoder(video_enc.clone())?;
-        Ok(video_enc)
-    }
-
-    /// Attaches an existing video encoder to this output.
-    ///
-    /// # Arguments
-    /// * `encoder` - The video encoder to attach
-    ///
-    /// # Returns
-    /// A Result indicating success or an error
-    pub fn set_video_encoder(&mut self, encoder: Arc<ObsVideoEncoder>) -> Result<(), ObsError> {
-        if encoder.encoder.0.is_null() {
-            return Err(ObsError::NullPointer);
-        }
-
-        if self.is_active()? {
-            return Err(ObsError::OutputAlreadyActive);
-        }
-
-        let output = self.output.clone();
-        let encoder_ptr = encoder.as_ptr();
-
-        run_with_obs!(self.runtime, (output, encoder_ptr), move || unsafe {
-            libobs::obs_output_set_video_encoder(output, encoder_ptr);
-        })?;
-
-        self.curr_video_encoder
-            .write()
-            .map_err(|e| ObsError::LockError(e.to_string()))?
-            .replace(encoder);
-
-        Ok(())
-    }
-
-    /// Updates the settings of this output.
-    ///
-    /// Note: This can only be done when the output is not active.
-    ///
-    /// # Arguments
-    /// * `settings` - The new settings to apply
-    ///
-    /// # Returns
-    /// A Result indicating success or an error
-    pub fn update_settings(&mut self, settings: ObsData) -> Result<(), ObsError> {
-        if self.is_active()? {
-            return Err(ObsError::OutputAlreadyActive);
-        }
-
-        let settings_ptr = settings.as_ptr();
-        let output = self.output.clone();
-
-        run_with_obs!(self.runtime, (output, settings_ptr), move || unsafe {
-            libobs::obs_output_update(output, settings_ptr)
-        })?;
-
+impl ObsObjectTraitPrivate for ObsOutputRef {
+    fn __internal_replace_settings(&self, settings: ImmutableObsData) -> Result<(), ObsError> {
         self.settings
             .write()
-            .map_err(|e| ObsError::LockError(e.to_string()))?
-            .replace(settings);
-        Ok(())
+            .map_err(|_| ObsError::LockError("Failed to acquire write lock on settings".into()))
+            .map(|mut settings_lock| {
+                *settings_lock = settings;
+            })
     }
 
-    /// Creates and attaches a new audio encoder to this output.
-    ///
-    /// This method creates a new audio encoder using the provided information,
-    /// sets up the audio handler, and attaches it to this output at the specified mixer index.
-    ///
-    /// # Arguments
-    /// * `info` - Information for creating the audio encoder
-    /// * `mixer_idx` - The mixer index to use (typically 0 for primary audio)
-    /// * `handler` - The audio output handler
-    ///
-    /// # Returns
-    /// A Result containing an Arc-wrapped ObsAudioEncoder or an error
-    pub fn create_and_set_audio_encoder(
-        &mut self,
-        info: AudioEncoderInfo,
-        mixer_idx: usize,
-    ) -> Result<Arc<ObsAudioEncoder>, ObsError> {
-        // Fail early before creating the encoder if the output is active
-        if self.is_active()? {
-            return Err(ObsError::OutputAlreadyActive);
-        }
-
-        let audio_enc = ObsAudioEncoder::new_from_info(info, mixer_idx, self.runtime.clone())?;
-        self.set_audio_encoder(audio_enc.clone(), mixer_idx)?;
-        Ok(audio_enc)
-    }
-
-    /// Attaches an existing audio encoder to this output at the specified mixer index.
-    ///
-    /// # Arguments
-    /// * `encoder` - The audio encoder to attach
-    /// * `mixer_idx` - The mixer index to use (typically 0 for primary audio)
-    ///
-    /// # Returns
-    /// A Result indicating success or an error
-    pub fn set_audio_encoder(
-        &mut self,
-        encoder: Arc<ObsAudioEncoder>,
-        mixer_idx: usize,
+    fn __internal_replace_hotkey_data(
+        &self,
+        hotkey_data: ImmutableObsData,
     ) -> Result<(), ObsError> {
-        if encoder.encoder.0.is_null() {
-            return Err(ObsError::NullPointer);
-        }
-
-        if self.is_active()? {
-            return Err(ObsError::OutputAlreadyActive);
-        }
-
-        let encoder_ptr = encoder.encoder.clone();
-        let output_ptr = self.output.clone();
-        run_with_obs!(self.runtime, (output_ptr, encoder_ptr), move || unsafe {
-            libobs::obs_output_set_audio_encoder(output_ptr, encoder_ptr, mixer_idx)
-        })?;
-
-        self.audio_encoders
+        self.hotkey_data
             .write()
-            .map_err(|e| ObsError::LockError(e.to_string()))?
-            .replace(encoder);
+            .map_err(|_| ObsError::LockError("Failed to acquire write lock on hotkey data".into()))
+            .map(|mut hotkey_lock| {
+                *hotkey_lock = hotkey_data;
+            })
+    }
+}
 
-        Ok(())
+impl ObsObjectTrait<*mut libobs::obs_output> for ObsOutputRef {
+    fn name(&self) -> ObsString {
+        self.name.clone()
     }
 
-    /// Starts the output.
-    ///
-    /// This begins the encoding and streaming/recording process.
-    ///
-    /// # Returns
-    /// A Result indicating success or an error (e.g., if the output is already active)
-    pub fn start(&self) -> Result<(), ObsError> {
+    fn id(&self) -> ObsString {
+        self.id.clone()
+    }
+
+    fn runtime(&self) -> &ObsRuntime {
+        &self.runtime
+    }
+
+    fn settings(&self) -> Result<ImmutableObsData, ObsError> {
+        let r = self
+            .settings
+            .read()
+            .map_err(|_| ObsError::LockError("Failed to acquire read lock on settings".into()))?;
+
+        Ok(r.clone())
+    }
+
+    fn hotkey_data(&self) -> Result<ImmutableObsData, ObsError> {
+        let r = self.hotkey_data.read().map_err(|_| {
+            ObsError::LockError("Failed to acquire read lock on hotkey data".into())
+        })?;
+
+        Ok(r.clone())
+    }
+
+    fn update_settings(&self, settings: ObsData) -> Result<(), ObsError> {
         if self.is_active()? {
             return Err(ObsError::OutputAlreadyActive);
         }
 
-        // Set the video and audio encoders before starting (similar to https://github.com/obsproject/obs-studio/blob/0b1229632063a13dfd26cf1cd9dd43431d8c68f6/frontend/utility/SimpleOutput.cpp#L552)
-        let vid_encoder_ptr = self
-            .curr_video_encoder
-            .read()
-            .map_err(|e| ObsError::LockError(e.to_string()))?
-            .as_ref()
-            .map(|enc| enc.as_ptr())
-            .unwrap_or(Sendable(ptr::null_mut()));
-
-        let audio_encoder_ptr = self
-            .audio_encoders
-            .read()
-            .map_err(|e| ObsError::LockError(e.to_string()))?
-            .as_ref()
-            .map(|enc| enc.encoder.clone())
-            .unwrap_or(Sendable(ptr::null_mut()));
-
-        let output_ptr = self.output.clone();
-        let res = run_with_obs!(
-            self.runtime,
-            (output_ptr, vid_encoder_ptr, audio_encoder_ptr),
-            move || unsafe {
-                libobs::obs_encoder_set_video(vid_encoder_ptr, libobs::obs_get_video());
-                libobs::obs_encoder_set_audio(audio_encoder_ptr, libobs::obs_get_audio());
-                libobs::obs_output_start(output_ptr)
-            }
-        )?;
-
-        if res {
-            return Ok(());
-        }
-
-        let err = run_with_obs!(self.runtime, (output_ptr), move || unsafe {
-            Sendable(libobs::obs_output_get_last_error(output_ptr))
-        })?;
-
-        // obs_output_get_last_error can return NULL if no error message was set
-        let err_str = if err.0.is_null() {
-            None
-        } else {
-            let c_str = unsafe { CStr::from_ptr(err.0) };
-            c_str.to_str().ok().map(|x| x.to_string())
-        };
-
-        Err(ObsError::OutputStartFailure(err_str))
+        inner_fn_update_settings!(self, libobs::obs_output_update, settings)
     }
 
-    /// This pauses or resumes the given output, and waits until the output is fully paused.
-    ///
-    /// # Arguments
-    ///
-    /// * `pause` - `true` to pause the output, `false` to resume the output.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - The output was paused or resumed successfully.
-    /// * `Err(ObsError::OutputPauseFailure(Some(String)))` - The output failed to pause or resume.
-    pub fn pause(&self, pause: bool) -> Result<(), ObsError> {
-        if !self.is_active()? {
-            return Err(ObsError::OutputPauseFailure(Some(
-                "Output is not active.".to_string(),
-            )));
-        }
-
-        let output_ptr = self.output.clone();
-
-        let mut rx = if pause {
-            self.signal_manager.on_pause()?
-        } else {
-            self.signal_manager.on_unpause()?
-        };
-
-        let res = run_with_obs!(self.runtime, (output_ptr), move || unsafe {
-            libobs::obs_output_pause(output_ptr, pause)
-        })?;
-
-        if res {
-            rx.blocking_recv().map_err(|_| ObsError::NoSenderError)?;
-
-            Ok(())
-        } else {
-            let err = run_with_obs!(self.runtime, (output_ptr), move || unsafe {
-                Sendable(libobs::obs_output_get_last_error(output_ptr))
-            })?;
-
-            // obs_output_get_last_error can return NULL if no error message was set
-            let err_str = if err.0.is_null() {
-                None
-            } else {
-                let c_str = unsafe { CStr::from_ptr(err.0) };
-                c_str.to_str().ok().map(|x| x.to_string())
-            };
-
-            Err(ObsError::OutputPauseFailure(err_str))
-        }
-    }
-
-    /// Stops the output.
-    ///
-    /// This ends the encoding and streaming/recording process.
-    /// The method waits for a stop signal and returns the result.
-    ///
-    /// # Returns
-    /// A Result indicating success or an error with details about why stopping failed
-    //TODO There should be some kind of "wait" for other methods to finish, generally we don't want to have multiple different methods calling methods
-    pub fn stop(&mut self) -> Result<(), ObsError> {
-        let output_ptr = self.output.clone();
-        let output_active = run_with_obs!(self.runtime, (output_ptr), move || unsafe {
-            libobs::obs_output_active(output_ptr)
-        })?;
-
-        if !output_active {
-            return Err(ObsError::OutputStopFailure(Some(
-                "Output is not active.".to_string(),
-            )));
-        }
-
-        let mut rx = self.signal_manager.on_stop()?;
-        let mut rx_deactivate = self.signal_manager.on_deactivate()?;
-
-        run_with_obs!(self.runtime, (output_ptr), move || unsafe {
-            libobs::obs_output_stop(output_ptr)
-        })?;
-
-        let signal = rx.blocking_recv().map_err(|_| ObsError::NoSenderError)?;
-
-        log::trace!("Received stop signal: {:?}", signal);
-        if signal != ObsOutputStopSignal::Success {
-            return Err(ObsError::OutputStopFailure(Some(signal.to_string())));
-        }
-
-        rx_deactivate
-            .blocking_recv()
-            .map_err(|_| ObsError::NoSenderError)?;
-
-        Ok(())
-    }
-
-    pub fn is_active(&self) -> Result<bool, ObsError> {
-        let output_ptr = self.output.clone();
-        let output_active = run_with_obs!(self.runtime, (output_ptr), move || unsafe {
-            libobs::obs_output_active(output_ptr)
-        })?;
-
-        Ok(output_active)
-    }
-
-    pub fn as_ptr(&self) -> Sendable<*mut obs_output> {
+    fn as_ptr(&self) -> SmartPointerSendable<*mut obs_output> {
         self.output.clone()
     }
 }
 
-impl_signal_manager!(|ptr| unsafe { libobs::obs_output_get_signal_handler(ptr) }, ObsOutputSignals for ObsOutputRef<*mut libobs::obs_output>, [
+impl ObsOutputTrait for ObsOutputRef {
+    fn signals(&self) -> &Arc<ObsOutputSignals> {
+        &self.signal_manager
+    }
+
+    fn video_encoder(&self) -> &Arc<RwLock<Option<Arc<ObsVideoEncoder>>>> {
+        &self.curr_video_encoder
+    }
+
+    fn audio_encoders(&self) -> &Arc<RwLock<HashMap<usize, Arc<ObsAudioEncoder>>>> {
+        &self.audio_encoders
+    }
+}
+
+impl_signal_manager!(|ptr: SmartPointerSendable<*mut libobs::obs_output>| unsafe {
+    // Safety: We are using a smart pointer, so it is fine
+    libobs::obs_output_get_signal_handler(ptr.get_ptr())
+}, ObsOutputSignals for *mut libobs::obs_output, [
     "start": {},
     "stop": {code: crate::enums::ObsOutputStopSignal},
     "pause": {},
@@ -474,5 +270,5 @@ impl_signal_manager!(|ptr| unsafe { libobs::obs_output_get_signal_handler(ptr) }
     "activate": {},
     "deactivate": {},
     "reconnect": {},
-    "reconnect_success": {},
+    "reconnect_success": {}
 ]);

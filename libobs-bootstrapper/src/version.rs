@@ -16,6 +16,7 @@ pub fn get_installed_version(obs_dll: &Path) -> Result<Option<String>, ObsBootst
     }
 
     log::trace!("Getting obs.dll version string");
+    // Safety: No coroutines are used here, and the obs.dll is expected to have the obs_get_version function
     unsafe {
         let lib = Library::new(obs_dll)
             .map_err(|e| ObsBootstrapError::LibLoadingError("Opening library", e))?;

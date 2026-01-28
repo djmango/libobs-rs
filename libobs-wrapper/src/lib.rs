@@ -1,3 +1,12 @@
+//! This crate contains a high level API wrapper around the OBs C API.
+//! To get started, have a look at the [examples](https://github.com/libobs-rs/libobs-rs/tree/main/examples) folder.
+//!
+//! For documentation, have a look at the [docs](https://libobs-rs.github.io/libobs_wrapper/).
+//!
+//! Also have a look at the [libobs-simple](https://crates.io/crates/libobs-simple) crate, which has a lot of
+//! source builders for easier source creation.
+//! You can also create outputs easily with it.
+
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
 pub mod context;
@@ -20,6 +29,3 @@ pub use libobs as sys;
 pub mod graphics;
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod macros;
-
-#[deprecated = "Use graphics::Vec2 instead."]
-pub type Vec2 = graphics::Vec2;

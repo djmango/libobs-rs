@@ -33,10 +33,6 @@ impl Default for ObsSdrVideoInfo {
 /// A wrapper for `obs_video_info`, which is used
 /// to pass information to libobs for the new OBS
 /// video context after resetting the old OBS
-/// video context.
-/// A wrapper for `obs_video_info`, which is used
-/// to pass information to libobs for the new OBS
-/// video context after resetting the old OBS
 /// video context. The obs_video_info is pinned in memory
 /// to ensure its address never changes, as required by libobs.
 pub struct ObsVideoInfo {

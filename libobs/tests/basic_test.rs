@@ -1,3 +1,7 @@
+#![allow(unknown_lints)]
+#![allow(require_safety_comments_on_unsafe)]
+#![allow(ensure_obs_call_in_runtime)]
+
 #[cfg(windows)]
 use std::{
     env::current_exe,
