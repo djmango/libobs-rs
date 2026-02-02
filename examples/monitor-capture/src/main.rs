@@ -31,7 +31,6 @@ use libobs_wrapper::sources::ObsSourceBuilder;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::io::{self, Write};
 
-
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
 pub struct NoLogger {}

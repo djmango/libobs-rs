@@ -172,7 +172,7 @@ fn generate_bindings(target_os: &str) {
     // For x86_64 targets, native SIMD headers are used and simde would conflict
     if target_os == "macos" {
         let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-        
+
         // Only include simde/homebrew paths for ARM targets
         if target_arch == "aarch64" {
             // Apple Silicon Macs

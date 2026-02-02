@@ -71,7 +71,9 @@ impl Drop for PlatformSpecificGuard {
 pub(crate) struct PlatformSpecificGuard;
 
 #[cfg(target_os = "macos")]
-pub(crate) fn platform_specific_setup(_unused: Option<()>) -> Result<Option<Rc<PlatformSpecificGuard>>, ObsError> {
+pub(crate) fn platform_specific_setup(
+    _unused: Option<()>,
+) -> Result<Option<Rc<PlatformSpecificGuard>>, ObsError> {
     Ok(None)
 }
 
@@ -184,14 +186,14 @@ pub(crate) unsafe fn platform_specific_setup(
     }
 }
 
-#[cfg(target_os="linux")]
+#[cfg(target_os = "linux")]
 #[derive(Debug)]
 enum PlatformType {
     X11,
     Wayland,
 }
 
-#[cfg(target_os="linux")]
+#[cfg(target_os = "linux")]
 fn detect_platform() -> Option<PlatformType> {
     // Check for Wayland first
     if std::env::var("WAYLAND_DISPLAY").is_ok() {

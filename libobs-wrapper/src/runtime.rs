@@ -259,7 +259,10 @@ impl ObsRuntime {
         log::trace!("Waiting for OBS thread to initialize");
         // Wait for initialization to complete
         let (mut m, info) = init_rx.recv().map_err(|e| {
-            ObsError::RuntimeChannelError(format!("Failed to receive initialization result: {:?}", e))
+            ObsError::RuntimeChannelError(format!(
+                "Failed to receive initialization result: {:?}",
+                e
+            ))
         })??;
 
         let thread_id = handle.thread().id();
