@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use crate::utils::ObsError;
 
 #[cfg(target_os = "linux")]
@@ -17,13 +15,6 @@ use crate::utils::initialization::NixDisplay;
 
 #[cfg(target_os = "linux")]
 use crate::utils::linux::{wl_display_disconnect, XCloseDisplay};
-
-#[cfg(target_os = "linux")]
-#[derive(Debug)]
-enum PlatformType {
-    X11,
-    Wayland,
-}
 
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
@@ -183,14 +174,8 @@ pub(crate) unsafe fn platform_specific_setup(
                 owned,
             })))
         }
+        PlatformType::Invalid => unreachable!(),
     }
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Debug)]
-enum PlatformType {
-    X11,
-    Wayland,
 }
 
 #[cfg(target_os = "linux")]

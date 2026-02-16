@@ -20,9 +20,6 @@ use libobs_wrapper::sources::ObsSourceBuilder;
 #[cfg(windows)]
 use libobs_wrapper::utils::traits::ObsUpdatable;
 
-#[cfg(target_os = "linux")]
-use libobs_simple::sources::linux::LinuxGeneralScreenCapture;
-
 #[cfg(target_os = "macos")]
 use libobs_simple::sources::macos::ScreenCaptureSourceBuilder;
 #[cfg(target_os = "macos")]
