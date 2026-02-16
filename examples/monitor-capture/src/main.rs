@@ -17,7 +17,15 @@ use libobs_simple::sources::windows::MonitorCaptureSourceBuilder;
 use libobs_wrapper::data::ObsObjectUpdater;
 #[cfg(windows)]
 use libobs_wrapper::sources::ObsSourceBuilder;
-#[cfg(target_os = "linux")]
+#[cfg(windows)]
+use libobs_wrapper::utils::traits::ObsUpdatable;
+
+#[cfg(target_os = "macos")]
+use libobs_simple::sources::macos::ScreenCaptureSourceBuilder;
+#[cfg(target_os = "macos")]
+use libobs_wrapper::sources::ObsSourceBuilder;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::io::{self, Write};
 
 #[cfg(target_os = "linux")]
@@ -73,6 +81,18 @@ fn main() -> anyhow::Result<()> {
         screen_capture.add_to_scene(&mut scene)?;
     }
 
+    #[cfg(target_os = "macos")]
+    {
+        // macOS uses ScreenCaptureKit via the screen_capture source
+        let _screen_capture = context
+            .source_builder::<ScreenCaptureSourceBuilder, _>("Screen Capture")?
+            .set_display(0) // Main display
+            .set_show_cursor(true)
+            .add_to_scene(&mut scene)?;
+
+        println!("Using macOS ScreenCaptureKit for screen capture");
+    }
+
     // Set up output to ./recording.mp4
     let mut output = context
         .simple_output_builder("monitor-capture-output", ObsPath::new("record.mp4"))
@@ -99,19 +119,13 @@ fn main() -> anyhow::Result<()> {
         thread::sleep(Duration::from_secs(5));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         print!("Recording... press Enter to stop.");
         io::stdout().flush()?;
 
         let mut buf = String::new();
         io::stdin().read_line(&mut buf)?;
-    }
-
-    #[cfg(not(any(windows, target_os = "linux")))]
-    {
-        eprintln!("This example is only supported on Windows and Linux.");
-        return Ok(());
     }
 
     // Stop recording

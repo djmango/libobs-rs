@@ -19,11 +19,11 @@ license = "GPL-3.0"
 
 
 [dependencies]
-async-stream = "0.3.5"  # Minimum version with proper async coroutine support
+async-stream = "0.3"
 futures-core = "0.3"
 futures-util = "0.3"
-hex = { workspace = true }
-lazy_static = { workspace = true }
+hex = {workspace = true }
+lazy_static = { workspace = true}
 tokio = { workspace = true, features = ["process", "macros"], default-features = false }
 libobs = { workspace = true }
 semver = "1"
@@ -32,7 +32,7 @@ sha2 = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
 reqwest = { workspace = true, features = ["stream", "json"] }
 serde = { workspace = true, features = ["derive"] }
-libloading = { workspace = true }
+libloading = { workspace = true}
 log = { workspace = true }
 serde_json = { workspace = true, optional = true }
 

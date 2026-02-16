@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread::JoinHandle;
+#[cfg(any(windows, target_os = "linux"))]
 use std::time::Duration;
 
 #[cfg(target_os = "linux")]
@@ -29,6 +30,7 @@ use libobs_wrapper::display::{
     ObsDisplayCreationData, ObsDisplayRef, ObsWindowHandle, ShowHideTrait, WindowPositionTrait,
 };
 use libobs_wrapper::sources::ObsSourceBuilder;
+#[cfg(any(windows, target_os = "linux"))]
 use libobs_wrapper::sources::ObsSourceTrait;
 use libobs_wrapper::unsafe_send::Sendable;
 use libobs_wrapper::{context::ObsContext, utils::StartupInfo};
@@ -69,6 +71,7 @@ struct ObsInner {
 }
 
 impl ObsInner {
+    #[cfg(any(windows, target_os = "linux"))]
     fn new(_event_loop: &ActiveEventLoop, window: &Window) -> anyhow::Result<Self> {
         //TODO This scales the output to 1920x1080, the captured window may be at a different aspect ratio
         let v = ObsVideoInfoBuilder::new()
@@ -196,12 +199,54 @@ impl ObsInner {
         };
         Ok(Self {
             context,
-            #[cfg_attr(not(target_os = "linux"), allow(unused_unsafe))]
             display,
             _scene_item: monitor_item,
             _guard: SignalThreadGuard {
                 should_exit,
                 handle: Some(handle),
+            },
+        })
+    }
+
+    #[cfg(target_os = "macos")]
+    fn new(_event_loop: &ActiveEventLoop, window: &Window) -> anyhow::Result<Self> {
+        // macOS screen capture sources are not yet implemented in libobs-simple
+        // For now, we create a basic OBS context without any sources
+        let v = ObsVideoInfoBuilder::new()
+            .base_width(1920)
+            .base_height(1080)
+            .output_width(1920)
+            .output_height(1080)
+            .build();
+
+        let info = StartupInfo::new().set_video_info(v);
+        let mut context = info.start()?;
+
+        let scene = context.scene("Main Scene")?;
+        scene.set_to_channel(0)?;
+
+        let hwnd = window.window_handle().unwrap().as_raw();
+        let obs_handle = if let RawWindowHandle::AppKit(handle) = hwnd {
+            ObsWindowHandle::new_from_cocoa(handle.ns_view.as_ptr() as *mut _)
+        } else {
+            panic!("Expected an AppKit window handle on macOS");
+        };
+
+        let size = window.inner_size();
+        let data = ObsDisplayCreationData::new(obs_handle, 0, 0, size.width, size.height);
+
+        let should_exit = Arc::new(AtomicBool::new(false));
+        let display = context.display(data)?;
+
+        println!("Note: macOS screen capture sources are not yet implemented in libobs-simple.");
+        println!("The preview window is created but no capture source is active.");
+
+        Ok(Self {
+            context,
+            display,
+            _guard: SignalThreadGuard {
+                should_exit,
+                handle: None,
             },
         })
     }

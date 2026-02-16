@@ -62,6 +62,7 @@ impl Drop for LinuxGlibLoop {
 
 /// # Safety
 /// You must ensure that the proxy is valid.
+#[allow(dead_code)]
 pub(crate) unsafe fn wl_proxy_get_display(
     proxy: *mut std::os::raw::c_void,
 ) -> Result<*mut std::os::raw::c_void, libloading::Error> {

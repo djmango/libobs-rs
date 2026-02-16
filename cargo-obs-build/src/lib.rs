@@ -1,3 +1,4 @@
+use anyhow::bail;
 use git::{fetch_latest_patch_release, fetch_release, ReleaseInfo};
 use lock::{acquire_lock, wait_for_lock};
 use log::{debug, info, warn};
@@ -13,6 +14,8 @@ use walkdir::WalkDir;
 use lib_version::get_lib_obs_version;
 
 use download::download_binaries;
+use tar::Archive;
+use xz2::read::XzDecoder;
 use zip::ZipArchive;
 
 pub use metadata::get_meta_info;
@@ -21,6 +24,8 @@ mod download;
 mod git;
 mod lib_version;
 mod lock;
+#[cfg(target_os = "macos")]
+mod macos;
 mod metadata;
 mod util;
 
@@ -130,6 +135,7 @@ impl Default for ObsBuildConfig {
 /// - Uses default cache directory ("obs-build") if none is specified in metadata
 /// - Auto-detects the OBS version from the libobs crate
 /// - Handles all caching and locking
+/// - Also copies essential helper binaries to the `deps/` subdirectory for test support
 ///
 /// # Example
 ///
@@ -157,7 +163,16 @@ pub fn install() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    build_obs_binaries(config)
+    build_obs_binaries(config)?;
+
+    // Also copy essential helper binaries to deps/ directory for test support
+    // Tests run from target/{profile}/deps/ and need obs-ffmpeg-mux there
+    let deps_dir = target_dir.join("deps");
+    if deps_dir.exists() {
+        copy_helper_binaries_to_deps(target_dir, &deps_dir)?;
+    }
+
+    Ok(())
 }
 
 /// Build and install OBS binaries according to the provided configuration
@@ -171,7 +186,13 @@ pub fn install() -> anyhow::Result<()> {
 pub fn build_obs_binaries(config: ObsBuildConfig) -> anyhow::Result<()> {
     //TODO For build scripts, we should actually check the TARGET env var instead of just erroring out on linux, but I don't think anyone will be cross-compiling
 
-    if cfg!(target_os = "linux") {
+    // Check if we are targeting Linux (not host Linux, but target Linux)
+    // We allow running on Linux if targeting Windows/macOS (cross-compilation)
+    let target_os = std::env::var("OBS_BUILD_TARGET_OS")
+        .or_else(|_| std::env::var("CARGO_CFG_TARGET_OS"))
+        .unwrap_or_else(|_| std::env::consts::OS.to_string());
+
+    if target_os == "linux" {
         // The case for the "install" subcommand is handled before calling this function
         return Err(anyhow::anyhow!("Building OBS Studio from source is required on Linux. You can install binaries by running `cargo-obs-build install` separately before building your project."));
     }
@@ -320,7 +341,39 @@ pub fn build_obs_binaries(config: ObsBuildConfig) -> anyhow::Result<()> {
     );
     copy_to_dir(&build_out, &target_out_dir, None)?;
 
+    // macOS-specific post-processing
+    #[cfg(target_os = "macos")]
+    macos::setup_macos_files(&target_out_dir)?;
+
     info!("Done!");
+
+    Ok(())
+}
+
+/// Copy essential helper binaries to the deps directory for test support.
+/// Tests run from target/{profile}/deps/ and need these binaries accessible.
+fn copy_helper_binaries_to_deps(target_dir: &Path, deps_dir: &Path) -> anyhow::Result<()> {
+    // List of helper binaries that need to be accessible from deps/
+    let helper_binaries = ["obs-ffmpeg-mux"];
+
+    for helper in &helper_binaries {
+        let src = target_dir.join(helper);
+        let dst = deps_dir.join(helper);
+
+        if src.exists() && !dst.exists() {
+            debug!("Copying {} to deps/ for test support", helper);
+            fs::copy(&src, &dst)?;
+
+            // On Unix, preserve executable permission
+            #[cfg(unix)]
+            {
+                if let Ok(metadata) = fs::metadata(&src) {
+                    let permissions = metadata.permissions();
+                    fs::set_permissions(&dst, permissions)?;
+                }
+            }
+        }
+    }
 
     Ok(())
 }
@@ -334,25 +387,86 @@ fn build_obs(
 ) -> anyhow::Result<()> {
     fs::create_dir_all(build_out)?;
 
-    let obs_path = if let Some(e) = override_zip {
-        e
+    let (obs_path, debug_symbols_path) = if let Some(e) = override_zip {
+        (e, None)
     } else {
-        download_binaries(build_out, &release)?
+        download_binaries(build_out, &release, remove_pdbs)?
     };
 
-    let obs_archive = File::open(&obs_path)?;
-    let mut archive = ZipArchive::new(&obs_archive)?;
-
     info!("Extracting OBS Studio binaries...");
-    archive.extract(build_out)?;
-    let bin_path = build_out.join("bin").join("64bit");
-    copy_to_dir(&bin_path, build_out, None)?;
-    fs::remove_dir_all(build_out.join("bin"))?;
+
+    // Extract based on file extension
+    if obs_path.extension().and_then(|s| s.to_str()) == Some("zip") {
+        // Windows: ZIP extraction
+        let obs_archive = File::open(&obs_path)?;
+        let mut archive = ZipArchive::new(&obs_archive)?;
+        archive.extract(build_out)?;
+
+        // Windows structure: /bin/64bit/obs.dll
+        let bin_path = build_out.join("bin").join("64bit");
+        copy_to_dir(&bin_path, build_out, None)?;
+        fs::remove_dir_all(build_out.join("bin"))?;
+    } else if obs_path.extension().and_then(|s| s.to_str()) == Some("dmg") {
+        // macOS: DMG extraction
+        #[cfg(target_os = "macos")]
+        macos::extract_dmg(&obs_path, build_out)?;
+
+        #[cfg(not(target_os = "macos"))]
+        bail!("DMG extraction is only supported on macOS");
+    } else if obs_path.extension().and_then(|s| s.to_str()) == Some("xz") {
+        // tar.xz extraction (fallback)
+        let obs_archive = File::open(&obs_path)?;
+        let decompressor = XzDecoder::new(obs_archive);
+        let mut archive = Archive::new(decompressor);
+        archive.unpack(build_out)?;
+
+        let lib_path = build_out.join("lib");
+        if lib_path.exists() {
+            copy_to_dir(&lib_path, build_out, None)?;
+        }
+    } else {
+        bail!("Unsupported archive format: {:?}", obs_path.extension());
+    }
+
+    // Extract debug symbols if present
+    if let Some(debug_path) = &debug_symbols_path {
+        info!("Extracting debug symbols...");
+        extract_debug_symbols(debug_path, build_out)?;
+    }
 
     clean_up_files(build_out, remove_pdbs, include_browser)?;
 
     fs::remove_file(&obs_path)?;
+    if let Some(debug_path) = debug_symbols_path {
+        fs::remove_file(&debug_path)?;
+    }
 
+    Ok(())
+}
+
+/// Extracts debug symbols archive (PDB or dSYM) into the build output directory.
+fn extract_debug_symbols(debug_path: &Path, build_out: &Path) -> anyhow::Result<()> {
+    let ext = debug_path.extension().and_then(|s| s.to_str());
+
+    if ext == Some("zip") {
+        // Windows PDB zip
+        let archive_file = File::open(debug_path)?;
+        let mut archive = ZipArchive::new(&archive_file)?;
+        archive.extract(build_out)?;
+    } else if ext == Some("xz") {
+        // macOS dSYM tar.xz
+        let archive_file = File::open(debug_path)?;
+        let decompressor = XzDecoder::new(archive_file);
+        let mut archive = Archive::new(decompressor);
+        archive.unpack(build_out)?;
+    } else {
+        bail!(
+            "Unsupported debug symbols archive format: {:?}",
+            debug_path.extension()
+        );
+    }
+
+    info!("✓ Extracted debug symbols");
     Ok(())
 }
 
@@ -394,7 +508,21 @@ fn clean_up_files(
     }
 
     info!("Cleaning up unnecessary files...");
-    for entry in WalkDir::new(build_out).into_iter().flatten() {
+    let walker = WalkDir::new(build_out).into_iter().filter_entry(|_entry| {
+        // Skip Resources and _CodeSignature directories inside .framework bundles (needed for code signing on macOS)
+        #[cfg(target_os = "macos")]
+        if macos::should_skip_entry(_entry.path()) {
+            return false;
+        }
+        true
+    });
+
+    for entry in walker {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
         let path = entry.path();
         if to_exclude.iter().any(|e| {
             path.file_name().is_some_and(|x| {

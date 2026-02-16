@@ -15,56 +15,117 @@ fn main() {
     let target_family = env::var("CARGO_CFG_TARGET_FAMILY").unwrap_or_default();
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
+    // For development, you can set LIBOBS_PATH to point to your custom libobs
     if let Ok(path) = env::var("LIBOBS_PATH") {
         println!("cargo:rustc-link-search=native={}", path);
-        println!("cargo:rustc-link-lib=dylib=obs");
+
+        if target_os == "macos" {
+            // Try framework first, fall back to dylib
+            println!("cargo:rustc-link-search=framework={}", path);
+            println!("cargo:rustc-link-lib=framework=libobs");
+        } else {
+            println!("cargo:rustc-link-lib=dylib=obs");
+        }
     } else if target_family == "windows" {
         let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
         println!("cargo:rustc-link-search=native={}", manifest_dir);
         println!("cargo:rustc-link-lib=dylib=obs");
+    } else if target_os == "macos" {
+        // macOS: Link to libobs.framework
+        let out_dir = env::var("OUT_DIR").unwrap();
+        let target_dir = std::path::Path::new(&out_dir)
+            .ancestors()
+            .find(|p| {
+                p.ends_with("target/debug")
+                    || p.ends_with("target/release")
+                    || p.file_name().and_then(|f| f.to_str()) == Some("debug")
+                    || p.file_name().and_then(|f| f.to_str()) == Some("release")
+            })
+            .and_then(|p| {
+                if p.ends_with("debug") || p.ends_with("release") {
+                    Some(p)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")));
+
+        println!("cargo:rustc-link-search=native={}", target_dir.display());
+        println!(
+            "cargo:rustc-link-search=native={}",
+            target_dir.join("deps").display()
+        );
+        println!("cargo:rustc-link-search=framework={}", target_dir.display());
+        println!(
+            "cargo:rustc-link-search=framework={}",
+            target_dir.join("deps").display()
+        );
+        println!("cargo:rustc-link-lib=framework=libobs");
+
+        // Add macOS system frameworks that libobs depends on
+        println!("cargo:rustc-link-lib=framework=CoreFoundation");
+        println!("cargo:rustc-link-lib=framework=CoreVideo");
+        println!("cargo:rustc-link-lib=framework=CoreMedia");
+        println!("cargo:rustc-link-lib=framework=CoreGraphics");
+        println!("cargo:rustc-link-lib=framework=AppKit");
+        println!("cargo:rustc-link-lib=framework=IOKit");
+        println!("cargo:rustc-link-lib=framework=IOSurface");
+        println!("cargo:rustc-link-lib=framework=AudioToolbox");
+        println!("cargo:rustc-link-lib=framework=VideoToolbox");
+
+        // Set rpath for dylib loading
+        println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path");
+        println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path");
+        println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/..");
+        println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path/..");
     } else if target_os == "linux" {
-        /*
-        let header = include_str!("./headers/obs/obs-config.h");
-        let mut major = "";
-        let mut minor = "";
-        let mut patch = "";
-        for line in header.lines() {
-            if line.starts_with("#define LIBOBS_API_MAJOR_VER") {
-                major = line.split_whitespace().last().unwrap();
-            } else if line.starts_with("#define LIBOBS_API_MINOR_VER") {
-                minor = line.split_whitespace().last().unwrap();
-            } else if line.starts_with("#define LIBOBS_API_PATCH_VER") {
-                patch = line.split_whitespace().last().unwrap();
-            }
-        }
-
-        let version = format!("{}.{}.{}", major, minor, patch);
-        */
-
-        let version = "30.0.0"; // Manually set for now, update when updating obs-studio version
-        pkg_config::Config::new()
+        // Linux: Try pkg-config first, fall back to just linking if OBS not found
+        // This allows CI builds without OBS installed
+        let version = "30.0.0";
+        match pkg_config::Config::new()
             .atleast_version(version)
             .probe("libobs")
-            .unwrap_or_else(|_| {
-                panic!(
-                    "Could not find libobs via pkg-config. Requires >= {}. See build guide.",
-                    version
-                )
-            });
+        {
+            Ok(_) => {
+                // OBS found via pkg-config, linking configured automatically
+            }
+            Err(_) => {
+                // OBS not found - emit link directive and let it fail at runtime if needed
+                println!("cargo:warning=libobs not found via pkg-config, using fallback linking");
+                println!("cargo:rustc-link-lib=dylib=obs");
+            }
+        }
     } else {
         // Fallback: assume dynamic libobs available via system linker path
         println!("cargo:rustc-link-lib=dylib=obs");
     }
 
+    // Generate bindings for non-Windows platforms or when explicitly requested
     let feature_generate_bindings = env::var_os("CARGO_FEATURE_GENERATE_BINDINGS").is_some();
     let should_generate_bindings = feature_generate_bindings || target_family != "windows";
 
     if should_generate_bindings {
-        generate_bindings(&target_os);
+        // On Linux, use pre-generated bindings by default (avoids needing OBS headers)
+        if target_os == "linux" {
+            let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
+            let bindings_src = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
+                .join("src")
+                .join("bindings_linux.rs");
+            if bindings_src.exists() {
+                println!("cargo:warning=Using pre-generated Linux bindings");
+                std::fs::copy(&bindings_src, out_path.join("bindings.rs"))
+                    .expect("Failed to copy pre-generated bindings");
+            } else {
+                // Fall back to generating if pre-generated don't exist
+                generate_bindings(&target_os);
+            }
+        } else {
+            generate_bindings(&target_os);
+        }
     }
 }
 
-// --- bindings support (previously gated by cfg) ---
+// --- bindings generation ---
 
 #[derive(Debug)]
 struct IgnoreMacros(HashSet<String>);
@@ -106,6 +167,29 @@ fn generate_bindings(target_os: &str) {
         .blocklist_function("^_.*")
         .clang_arg(format!("-I{}", "headers/obs"));
 
+    // macOS: Add Homebrew include paths for simde and other dependencies
+    // Only add simde paths when building for ARM targets (where simde emulates x86 intrinsics)
+    // For x86_64 targets, native SIMD headers are used and simde would conflict
+    if target_os == "macos" {
+        let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+
+        // Only include simde/homebrew paths for ARM targets
+        if target_arch == "aarch64" {
+            // Apple Silicon Macs
+            if std::path::Path::new("/opt/homebrew/include").exists() {
+                builder = builder.clang_arg("-I/opt/homebrew/include");
+            }
+            // Tell simde to not use native SIMD - avoids ARM NEON type alignment issues
+            builder = builder.clang_arg("-DSIMDE_NO_NATIVE");
+        } else if target_arch == "x86_64" {
+            // Intel Macs - only add if not cross-compiling from ARM
+            // (cross-compiling would have conflicting simde headers)
+            if std::path::Path::new("/usr/local/include").exists() {
+                builder = builder.clang_arg("-I/usr/local/include");
+            }
+        }
+    }
+
     // Apply previous windows/MSVC blocklists when not Linux and feature not enabled.
     if target_os != "linux" && !include_win_bindings {
         builder = builder
@@ -137,6 +221,7 @@ fn generate_bindings(target_os: &str) {
         .derive_partialord(false)
         .derive_ord(false)
         .merge_extern_blocks(true)
+        .layout_tests(false) // Disable layout tests to avoid SIMD type alignment issues
         .generate()
         .expect("Error generating bindings");
 

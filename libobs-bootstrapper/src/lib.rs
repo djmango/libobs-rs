@@ -2,7 +2,10 @@
 // awaits and streams use unsafe internally, so I'm gonna check for unsafe blocks manually here.
 #![allow(unknown_lints, require_safety_comments_on_unsafe)]
 
-use std::{env, path::PathBuf, process};
+use std::{env, path::PathBuf};
+
+#[cfg(not(target_os = "macos"))]
+use std::process;
 
 use async_stream::stream;
 use download::DownloadStatus;
@@ -11,6 +14,8 @@ use futures_core::Stream;
 use futures_util::{StreamExt, pin_mut};
 use lazy_static::lazy_static;
 use libobs::{LIBOBS_API_MAJOR_VER, LIBOBS_API_MINOR_VER, LIBOBS_API_PATCH_VER};
+
+#[cfg(not(target_os = "macos"))]
 use tokio::{fs::File, io::AsyncWriteExt, process::Command};
 
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -35,6 +40,9 @@ pub use options::ObsBootstrapperOptions;
 
 use crate::status_handler::{ObsBootstrapConsoleHandler, ObsBootstrapStatusHandler};
 
+#[cfg(all(not(feature = "__ci"), target_os = "linux"))]
+compile_error!("libobs-bootstrapper is not supported on Linux.");
+
 pub enum BootstrapStatus {
     /// Downloading status (first is progress from 0.0 to 1.0 and second is message)
     Downloading(f32, String),
@@ -47,6 +55,9 @@ pub enum BootstrapStatus {
     /// Therefore, the "updater" is spawned to watch for the application to exit and rename the "obs_new.dll" file to "obs.dll".
     /// The updater will start the application again with the same arguments as the original application.
     RestartRequired,
+    /// Bootstrap completed successfully without requiring a restart.
+    /// This is used on macOS where files can be moved immediately.
+    Done,
 }
 
 /// A struct for bootstrapping OBS Studio.
@@ -76,19 +87,33 @@ lazy_static! {
 pub const UPDATER_SCRIPT: &str = include_str!("./updater.ps1");
 
 fn get_obs_dll_path() -> Result<PathBuf, ObsBootstrapError> {
+    #[cfg(not(target_os = "linux"))]
     let executable =
         env::current_exe().map_err(|e| ObsBootstrapError::IoError("Getting current exe", e))?;
-    let obs_dll = executable
-        .parent()
-        .ok_or_else(|| {
-            ObsBootstrapError::IoError(
-                "Failed to get parent directory",
-                std::io::Error::from(std::io::ErrorKind::InvalidInput),
-            )
-        })?
-        .join("obs.dll");
+    #[cfg(not(target_os = "linux"))]
+    let parent = executable.parent().ok_or_else(|| {
+        ObsBootstrapError::IoError(
+            "Failed to get parent directory",
+            std::io::Error::from(std::io::ErrorKind::InvalidInput),
+        )
+    })?;
 
-    Ok(obs_dll)
+    #[cfg(target_os = "macos")]
+    {
+        // macOS: Check for libobs.framework
+        Ok(parent.join("libobs.framework/Versions/A/libobs"))
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Windows: Check for obs.dll
+        Ok(parent.join("obs.dll"))
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        unreachable!("libobs-bootstrapper is not supported on Linux.");
+    }
 }
 
 pub(crate) fn bootstrap(
@@ -108,6 +133,7 @@ pub(crate) fn bootstrap(
         return Ok(None);
     }
 
+    #[allow(unused_variables)]
     let options = options.clone();
     Ok(Some(stream! {
         log::debug!("Downloading OBS from {}", repo);
@@ -165,16 +191,32 @@ pub(crate) fn bootstrap(
             }
         }
 
-        let r = spawn_updater(options).await;
-        if let Err(err) = r {
-            yield BootstrapStatus::Error(err);
-            return;
+        // Platform-specific post-extraction handling
+        #[cfg(target_os = "macos")]
+        {
+            // On macOS, we can move files immediately since dylibs can be replaced while running
+            let r = move_obs_files_macos().await;
+            if let Err(err) = r {
+                yield BootstrapStatus::Error(err);
+                return;
+            }
+            yield BootstrapStatus::Done;
         }
 
-        yield BootstrapStatus::RestartRequired;
+        #[cfg(not(target_os = "macos"))]
+        {
+            // On Windows, we need to spawn an updater and restart
+            let r = spawn_updater(options).await;
+            if let Err(err) = r {
+                yield BootstrapStatus::Error(err);
+                return;
+            }
+            yield BootstrapStatus::RestartRequired;
+        }
     }))
 }
 
+#[cfg(not(target_os = "macos"))]
 pub(crate) async fn spawn_updater(
     options: ObsBootstrapperOptions,
 ) -> Result<(), ObsBootstrapError> {
@@ -232,6 +274,71 @@ pub(crate) async fn spawn_updater(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+async fn move_obs_files_macos() -> Result<(), ObsBootstrapError> {
+    use tokio::fs;
+
+    let exe_path =
+        env::current_exe().map_err(|e| ObsBootstrapError::IoError("Getting current exe", e))?;
+    let exe_dir = exe_path.parent().ok_or_else(|| {
+        ObsBootstrapError::IoError(
+            "Getting exe parent directory",
+            std::io::Error::from(std::io::ErrorKind::InvalidInput),
+        )
+    })?;
+
+    let obs_new_dir = exe_dir.join("obs_new");
+
+    if !obs_new_dir.exists() {
+        log::warn!("obs_new directory not found at {:?}", obs_new_dir);
+        return Ok(());
+    }
+
+    log::info!("Moving OBS files from {:?} to {:?}", obs_new_dir, exe_dir);
+
+    // Read all entries in obs_new
+    let mut entries = fs::read_dir(&obs_new_dir)
+        .await
+        .map_err(|e| ObsBootstrapError::IoError("Reading obs_new directory", e))?;
+
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| ObsBootstrapError::IoError("Reading directory entry", e))?
+    {
+        let src_path = entry.path();
+        let file_name = entry.file_name();
+        let dest_path = exe_dir.join(&file_name);
+
+        // Remove destination if it exists
+        if dest_path.exists() {
+            if dest_path.is_dir() {
+                fs::remove_dir_all(&dest_path)
+                    .await
+                    .map_err(|e| ObsBootstrapError::IoError("Removing old directory", e))?;
+            } else {
+                fs::remove_file(&dest_path)
+                    .await
+                    .map_err(|e| ObsBootstrapError::IoError("Removing old file", e))?;
+            }
+        }
+
+        // Move the file/directory
+        log::debug!("  Moving {:?} to {:?}", file_name, dest_path);
+        fs::rename(&src_path, &dest_path)
+            .await
+            .map_err(|e| ObsBootstrapError::IoError("Moving file/directory", e))?;
+    }
+
+    // Remove the now-empty obs_new directory
+    fs::remove_dir(&obs_new_dir)
+        .await
+        .map_err(|e| ObsBootstrapError::IoError("Removing obs_new directory", e))?;
+
+    log::info!("✓ OBS files moved successfully");
+
+    Ok(())
+}
 pub enum ObsBootstrapperResult {
     /// No action was needed, OBS is already installed and up to date.
     None,
@@ -383,6 +490,9 @@ impl ObsBootstrapper {
                     }
                     BootstrapStatus::RestartRequired => {
                         return Ok(ObsBootstrapperResult::Restart);
+                    }
+                    BootstrapStatus::Done => {
+                        return Ok(ObsBootstrapperResult::None);
                     }
                 }
             }

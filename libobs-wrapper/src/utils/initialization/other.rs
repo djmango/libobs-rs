@@ -1,4 +1,4 @@
-use std::ptr;
+use crate::utils::ObsError;
 
 #[cfg(target_os = "linux")]
 use super::PlatformType;
@@ -8,12 +8,15 @@ use std::rc::Rc;
 use crate::unsafe_send::Sendable;
 
 #[cfg(target_os = "linux")]
+use std::ptr;
+
+#[cfg(target_os = "linux")]
 use crate::utils::initialization::NixDisplay;
-use crate::utils::ObsError;
 
 #[cfg(target_os = "linux")]
 use crate::utils::linux::{wl_display_disconnect, XCloseDisplay};
 
+#[cfg(target_os = "linux")]
 #[derive(Debug)]
 pub(crate) struct PlatformSpecificGuard {
     display: Sendable<*mut std::os::raw::c_void>,
@@ -22,6 +25,7 @@ pub(crate) struct PlatformSpecificGuard {
     owned: bool,
 }
 
+#[cfg(target_os = "linux")]
 impl Drop for PlatformSpecificGuard {
     fn drop(&mut self) {
         if !self.owned {
@@ -52,9 +56,16 @@ impl Drop for PlatformSpecificGuard {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
-pub(crate) fn platform_specific_setup() -> Result<Option<Rc<PlatformSpecificGuard>>, ObsError> {
-    return Ok(None);
+// macOS doesn't need any special platform setup - it uses native Cocoa/Metal
+#[cfg(target_os = "macos")]
+#[derive(Debug)]
+pub(crate) struct PlatformSpecificGuard;
+
+#[cfg(target_os = "macos")]
+pub(crate) fn platform_specific_setup(
+    _unused: Option<()>,
+) -> Result<Option<Rc<PlatformSpecificGuard>>, ObsError> {
+    Ok(None)
 }
 
 /// Detects the current display server and initializes OBS platform accordingly

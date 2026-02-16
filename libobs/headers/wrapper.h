@@ -7,7 +7,6 @@
 #ifdef _WIN32
 #include "display_capture.h"
 #include "game_capture.h"
-// #include "obs/util/windows/window-helpers.h"
 
 #ifdef __cplusplus
 extern "C" {

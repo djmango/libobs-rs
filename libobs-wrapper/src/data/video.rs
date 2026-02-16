@@ -186,7 +186,9 @@ impl ObsVideoInfoBuilder {
 
         Self {
             adapter: 0,
-            #[cfg(target_family = "unix")]
+            #[cfg(target_os = "macos")]
+            graphics_module: ObsGraphicsModule::Metal,
+            #[cfg(all(target_family = "unix", not(target_os = "macos")))]
             graphics_module: ObsGraphicsModule::OpenGL,
             #[cfg(target_family = "windows")]
             graphics_module: ObsGraphicsModule::DirectX11,
@@ -209,11 +211,19 @@ impl ObsVideoInfoBuilder {
     /// to create an `ObsVideoInfo`.
     pub fn build(self) -> ObsVideoInfo {
         let graphics_mod_str = match self.graphics_module {
-            #[cfg(not(target_os = "linux"))]
-            ObsGraphicsModule::OpenGL => ObsString::new("libobs-opengl"),
+            // macOS uses .dylib extension
+            #[cfg(target_os = "macos")]
+            ObsGraphicsModule::OpenGL => ObsString::new("libobs-opengl.dylib"),
+            // Linux dynamically determines the lib name (includes .so extension)
             #[cfg(target_os = "linux")]
             ObsGraphicsModule::OpenGL => ObsString::new(get_linux_opengl_lib_name()),
+            // Windows uses no extension for OpenGL (OBS appends it)
+            #[cfg(target_os = "windows")]
+            ObsGraphicsModule::OpenGL => ObsString::new("libobs-opengl"),
+            // Windows DirectX11 includes .dll extension
             ObsGraphicsModule::DirectX11 => ObsString::new("libobs-d3d11.dll"),
+            // macOS Metal includes .dylib extension
+            ObsGraphicsModule::Metal => ObsString::new("libobs-metal.dylib"),
         };
 
         let ovi = obs_video_info {

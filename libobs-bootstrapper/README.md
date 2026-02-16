@@ -10,6 +10,7 @@ Note: This crate currently supports Windows and MacOS platforms. Refer to the li
 ## Features
 
 - **Automatic OBS Download**: Downloads appropriate OBS binaries at runtime
+- **Cross-Platform**: Supports Windows (7z), macOS (DMG)
 - **Progress Tracking**: Built-in progress reporting for downloads and extraction
 - **Version Management**: Handles OBS version checking and updates
 - **Custom Status Handlers**: Flexible progress reporting via custom handlers
@@ -30,34 +31,37 @@ libobs-bootstrapper = "0.2.0"
 Here's a simple example using the default console handler:
 
 ```rust
-use std::{sync::Arc, time::Duration};
 use libobs_bootstrapper::{
     ObsBootstrapper, ObsBootstrapperOptions, ObsBootstrapperResult
 };
 use libobs_wrapper::{context::ObsContext, utils::StartupInfo};
 
-
 #[tokio::main]
-async fn main() {
-    env_logger::init();
-    println!("Starting OBS bootstrapper...");
-    let handler = ObsBootstrapProgress::new();
-
-    let res = ObsBootstrapper::bootstrap(&ObsBootstrapperOptions::default())
-        .await
-        .unwrap();
-    if matches!(res, ObsBootstrapperResult::Restart) {
-        println!("OBS has been downloaded and extracted. The application will now restart.");
-        return;
+async fn main() -> anyhow::Result<()> {
+    // Configure bootstrapper options
+    let options = ObsBootstrapperOptions::default();
+    
+    // Run bootstrap with default console handler
+    match ObsBootstrapper::bootstrap(&options).await? {
+        ObsBootstrapperResult::None => {
+            println!("OBS is already installed and up to date!");
+        }
+        ObsBootstrapperResult::Restart => {
+            // This only happens on Windows - macOS moves files immediately
+            println!("OBS has been updated. Restarting application...");
+            ObsBootstrapper::spawn_updater(options).await?;
+            std::process::exit(0);
+        }
     }
 
     let context = ObsContext::new(StartupInfo::default()).unwrap();
-    handler.done();
 
     println!("Done");
     // Use the context here
     // For example creating new obs data
     context.data().unwrap();
+    
+    Ok(())
 }
 ```
 
@@ -103,7 +107,8 @@ impl ObsBootstrapStatusHandler for CustomProgressHandler {
 
 ### Setup Steps
 
-1. You can either: <br>
+1. **Windows only:** Add a placeholder DLL<br>
+   You can either: <br>
    **a) RECOMMENDED** enable the `install_dummy_dll` feature for this crate <br>
    **b)** Add a placeholder `obs.dll` file to your executable directory:
      - Download a dummy DLL from [libobs-builds releases](https://github.com/sshcrack/libobs-builds/releases)
@@ -112,9 +117,19 @@ impl ObsBootstrapStatusHandler for CustomProgressHandler {
 
 2. Call `ObsBootstrapper::bootstrap()` at application startup
 
-3. If `ObsBootstrapperResult::Restart` is returned:
-   - Exit the application
-   - The updater will restart your application automatically
+3. Handle the result based on platform:
+   - **Windows**: If `ObsBootstrapperResult::Restart` is returned, exit the application and the updater will restart it automatically
+   - **macOS**: Bootstrap completes immediately, no restart needed (`ObsBootstrapperResult::None` is returned after successful installation)
+
+### Platform-Specific Notes
+
+- **Windows**: Downloads and extracts 7z archives from custom builds
+  - Requires application restart to complete installation
+  - An updater script moves files from `obs_new/` to the executable directory after restart
+- **macOS**: Downloads official OBS DMG files and extracts frameworks, plugins, and data
+  - **No restart required** - files are moved immediately after extraction
+  - Automatic code signature handling (DMG files come pre-signed by OBS)
+  - Dylibs can be replaced while the application is running
 
 ### Advanced Options
 

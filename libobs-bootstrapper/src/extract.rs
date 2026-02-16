@@ -1,6 +1,7 @@
 use std::{
     env::current_exe,
     path::{Path, PathBuf},
+    pin::Pin,
 };
 
 use async_stream::stream;
@@ -16,9 +17,8 @@ pub enum ExtractStatus {
     Progress(f32, String),
 }
 
-pub(crate) async fn extract_obs(
-    archive_file: &Path,
-) -> Result<impl Stream<Item = ExtractStatus>, ObsBootstrapError> {
+type ExtractStream = Pin<Box<dyn Stream<Item = ExtractStatus> + Send>>;
+pub(crate) async fn extract_obs(archive_file: &Path) -> Result<ExtractStream, ObsBootstrapError> {
     log::info!("Extracting OBS at {}", archive_file.display());
 
     let path = PathBuf::from(archive_file);
@@ -31,6 +31,14 @@ pub(crate) async fn extract_obs(
             ObsBootstrapError::ExtractError("Should be able to get parent of exe".to_string())
         })?
         .join("obs_new");
+
+    // Platform-specific extraction
+    #[cfg(target_os = "macos")]
+    {
+        if path.extension().and_then(|s| s.to_str()) == Some("dmg") {
+            return extract_dmg(&path, &destination).await;
+        }
+    }
 
     //TODO delete old obs dlls and plugins
     let dest = destination.clone();
@@ -88,7 +96,7 @@ pub(crate) async fn extract_obs(
         yield Ok((1.0, "Extraction done".to_string()));
     };
 
-    Ok(stream! {
+    Ok(Box::pin(stream! {
             pin_mut!(stream);
             while let Some(status) = stream.next().await {
                 match status {
@@ -101,5 +109,158 @@ pub(crate) async fn extract_obs(
                 }
             }
 
-    })
+    }))
+}
+
+#[cfg(target_os = "macos")]
+async fn extract_dmg(
+    dmg_path: &Path,
+    output_dir: &Path,
+) -> Result<ExtractStream, ObsBootstrapError> {
+    use tokio::process::Command;
+    use uuid::Uuid;
+
+    let mount_point = PathBuf::from("/tmp").join(format!("obs-mount-{}", Uuid::new_v4()));
+    let dmg_path_buf = dmg_path.to_path_buf();
+    let output_dir_buf = output_dir.to_path_buf();
+
+    let stream = stream! {
+        let dmg_path = &dmg_path_buf;
+        let output_dir = &output_dir_buf;
+
+        yield Ok((0.0, "Mounting DMG...".to_string()));
+
+        // Create mount point
+        let create_result = tokio::fs::create_dir_all(&mount_point).await;
+        if let Err(e) = create_result {
+            yield Err(ObsBootstrapError::IoError("Creating mount point directory", e));
+            return;
+        }
+
+        // Mount the DMG
+        let mount_output = Command::new("hdiutil")
+            .args(["attach", "-nobrowse", "-mountpoint"])
+            .arg(&mount_point)
+            .arg(dmg_path)
+            .output()
+            .await?;
+
+        if !mount_output.status.success() {
+            let error_msg = String::from_utf8_lossy(&mount_output.stderr);
+            yield Err(ObsBootstrapError::ExtractError(format!("Failed to mount DMG: {}", error_msg)));
+            return;
+        }
+
+        yield Ok((0.3, "Copying files...".to_string()));
+
+        // Copy OBS.app contents
+        let app_path = mount_point.join("OBS.app/Contents");
+        if !app_path.exists() {
+            let _ = Command::new("hdiutil").args(["detach"]).arg(&mount_point).output().await;
+            yield Err(ObsBootstrapError::ExtractError("OBS.app not found in DMG".to_string()));
+            return;
+        }
+
+        // Create output directory
+        if let Err(e) = tokio::fs::create_dir_all(&output_dir).await {
+            let _ = Command::new("hdiutil").args(["detach"]).arg(&mount_point).output().await;
+            yield Err(ObsBootstrapError::IoError("Creating output directory", e));
+            return;
+        }
+
+        yield Ok((0.4, "Copying Frameworks...".to_string()));
+
+        // Copy Frameworks (contains libobs.dylib and dependencies)
+        let frameworks_path = app_path.join("Frameworks");
+        if frameworks_path.exists()
+            && let Err(e) = copy_dir_recursive(&frameworks_path, output_dir).await {
+                let _ = Command::new("hdiutil").args(["detach"]).arg(&mount_point).output().await;
+                yield Err(e);
+                return;
+            }
+
+        yield Ok((0.7, "Copying PlugIns...".to_string()));
+
+        // Copy PlugIns
+        let plugins_path = app_path.join("PlugIns");
+        if plugins_path.exists() {
+            let dest_plugins = output_dir.join("obs-plugins");
+            if let Err(e) = copy_dir_recursive(&plugins_path, &dest_plugins).await {
+                let _ = Command::new("hdiutil").args(["detach"]).arg(&mount_point).output().await;
+                yield Err(e);
+                return;
+            }
+        }
+
+        yield Ok((0.9, "Copying Resources...".to_string()));
+
+        // Copy Resources/data
+        let data_path = app_path.join("Resources/data");
+        if data_path.exists() {
+            let dest_data = output_dir.join("data");
+            if let Err(e) = copy_dir_recursive(&data_path, &dest_data).await {
+                let _ = Command::new("hdiutil").args(["detach"]).arg(&mount_point).output().await;
+                yield Err(e);
+                return;
+            }
+        }
+
+        yield Ok((0.95, "Unmounting DMG...".to_string()));
+
+        // Unmount
+        let unmount_output = Command::new("hdiutil")
+            .args(["detach"])
+            .arg(&mount_point)
+            .output()
+            .await?;
+
+        if !unmount_output.status.success() {
+            log::warn!("Failed to unmount DMG cleanly, but files were copied");
+        }
+
+        // Clean up mount point
+        let _ = tokio::fs::remove_dir(&mount_point).await;
+
+        yield Ok((1.0, "Extraction complete".to_string()));
+    };
+
+    Ok(Box::pin(stream! {
+        pin_mut!(stream);
+        while let Some(status) = stream.next().await {
+            match status {
+                Ok(e) => yield ExtractStatus::Progress(e.0, e.1),
+                Err(err) => {
+                    log::error!("Error extracting DMG: {:?}", err);
+                    yield ExtractStatus::Error(err);
+                    return;
+                }
+            }
+        }
+    }))
+}
+
+#[cfg(target_os = "macos")]
+async fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), ObsBootstrapError> {
+    use tokio::process::Command;
+
+    // Use ditto to preserve code signatures and extended attributes on macOS
+    tokio::fs::create_dir_all(dst.parent().unwrap_or(dst))
+        .await
+        .map_err(|e| ObsBootstrapError::IoError("Creating destination parent directory", e))?;
+
+    let status = Command::new("ditto")
+        .arg(src)
+        .arg(dst)
+        .status()
+        .await
+        .map_err(|e| ObsBootstrapError::IoError("Executing ditto command", e))?;
+
+    if !status.success() {
+        return Err(ObsBootstrapError::ExtractError(format!(
+            "ditto command failed with exit code: {}",
+            status.code().unwrap_or(-1)
+        )));
+    }
+
+    Ok(())
 }

@@ -3,6 +3,7 @@
 
 mod creation_data;
 mod enums;
+//TODO
 mod window_manager;
 
 pub use window_manager::{MiscDisplayTrait, ShowHideTrait, WindowPositionTrait};
@@ -23,6 +24,7 @@ use std::{
     sync::{atomic::AtomicUsize, Arc, RwLock},
 };
 
+#[allow(dead_code)]
 static ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 #[derive(Debug, Clone)]
 /// You can use the `ObsContext` to create this struct. This struct is stored in the
@@ -120,6 +122,7 @@ pub struct LockedPosition {
 
 #[derive(Clone, Debug)]
 pub struct ObsWindowHandle {
+    #[allow(dead_code)]
     pub(crate) window: Sendable<libobs::gs_window>,
     #[allow(dead_code)]
     pub(crate) is_wayland: bool,
@@ -137,6 +140,24 @@ impl ObsWindowHandle {
     #[cfg(windows)]
     pub fn get_hwnd(&self) -> windows::Win32::Foundation::HWND {
         windows::Win32::Foundation::HWND(self.window.0.hwnd)
+    }
+
+    /// Creates a new ObsWindowHandle from a Cocoa NSView pointer.
+    ///
+    /// # Arguments
+    /// * `view` - A pointer to an NSView (or compatible view type)
+    ///
+    /// # Safety
+    /// The caller must ensure that the view pointer is valid and remains valid
+    /// for the lifetime of this handle.
+    #[cfg(target_os = "macos")]
+    pub fn new_from_cocoa(view: *mut c_void) -> Self {
+        Self {
+            window: Sendable(libobs::gs_window {
+                view: view as *mut _,
+            }),
+            is_wayland: false,
+        }
     }
 
     #[cfg(target_os = "linux")]

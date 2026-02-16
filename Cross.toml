@@ -1,0 +1,8 @@
+[target.x86_64-unknown-linux-gnu]
+pre-build = [
+  "apt-get update && apt-get install -y libssl-dev pkg-config libx11-dev libwayland-dev libglib2.0-dev clang git",
+  "git clone --depth 1 https://github.com/simd-everywhere/simde.git /tmp/simde && cp -r /tmp/simde/simde /usr/include/",
+]
+
+[target.x86_64-unknown-linux-gnu.env]
+passthrough = ["LIBOBS_PATH"]

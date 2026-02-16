@@ -19,6 +19,24 @@ The API is currently unstable and will definitely have breaking revisions in the
 
 
 ## Prerequisites
+
+### macOS Build Dependencies
+
+On macOS, you need to install `simde` (SIMD Everywhere) for building the bindings:
+
+```bash
+brew install simde
+```
+
+### Option 1: Using libobs-bootstrapper (Recommended for macOS and distribution)
+
+> [!NOTE]
+> The `libobs-bootstrapper` crate downloads and installs OBS binaries at runtime, which is especially useful for macOS (downloads official signed DMG files) and for distributing applications without requiring users to install OBS separately.
+
+See the [libobs-bootstrapper documentation](https://crates.io/crates/libobs-bootstrapper) for detailed usage instructions.
+
+### Option 2: Using cargo-obs-build (Windows/Linux development)
+
 Make sure that the OBS binaries are in your target directory. There's even a tool to help you build OBS from source! <br>
 Install the tool
 ```bash
